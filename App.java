@@ -284,9 +284,11 @@ public class App {
                         <html lang="ja">
                         <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>わたしのTodo</title>
                         <style>
-                        *{box-sizing:border-box}body{max-width:640px;margin:40px auto;padding:0 16px;background:#f6f8fa;color:#24292f;font-family:system-ui,sans-serif;font-size:16px}h1{font-size:24px}form{display:flex;gap:8px}input{min-width:0;flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:6px}button,.action{display:inline-block;padding:9px 14px;border:0;border-radius:6px;color:#fff;font-size:16px;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}ul{margin:16px 0 0;padding:0;list-style:none}li{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#8c959f;text-decoration:line-through}.actions{display:flex;gap:8px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}@media(max-width:480px){body{margin:24px auto}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}
+                        *{box-sizing:border-box}body{max-width:640px;margin:40px auto;padding:0 16px;background:#f6f8fa;color:#24292f;font-family:system-ui,sans-serif;font-size:16px}h1{font-size:24px}form{display:flex;gap:8px}input,select{min-width:0;flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f}button,.action{display:inline-block;padding:9px 14px;border:0;border-radius:6px;color:#fff;font-size:16px;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}ul{margin:16px 0 0;padding:0;list-style:none}li{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#8c959f;text-decoration:line-through}.actions{display:flex;gap:8px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}#theme-toggle{margin-bottom:16px;background:#57606a}[data-theme="dark"]{color-scheme:dark}[data-theme="dark"] body{background:#0d1117;color:#e6edf3}[data-theme="dark"] input,[data-theme="dark"] select{border-color:#6e7681;background:#161b22;color:#e6edf3}[data-theme="dark"] li{border-color:#30363d;background:#161b22}[data-theme="dark"] button{background:#238636}[data-theme="dark"] #theme-toggle{background:#6e7681}[data-theme="dark"] .done{background:#1f6feb}[data-theme="dark"] .edit{background:#8957e5}[data-theme="dark"] .delete{background:#da3633}[data-theme="dark"] .todo-title.completed{color:#8b949e}@media(max-width:480px){body{margin:24px auto}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}
                         </style>
+                        <script>if(localStorage.getItem('theme')==='dark'){document.documentElement.dataset.theme='dark'}</script>
                         </head><body><h1>わたしのTodo</h1>
+                        <button id="theme-toggle" type="button">ライト／ダーク</button>
                         <form method="post" action="/add"><input name="todo"><input type="date" name="deadline"><input name="category" placeholder="カテゴリ（未入力は未分類）"><button>追加</button>
                         """);
         html.append("<input type='hidden' name='filter' value='").append(filter).append("'>")
@@ -375,7 +377,7 @@ public class App {
             }
             html.append("</ul>");
         }
-        return html.append("</body></html>").toString();
+        return html.append("<script>document.getElementById('theme-toggle').addEventListener('click',function(){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('theme',dark?'dark':'light');this.setAttribute('aria-pressed',dark);});</script></body></html>").toString();
     }
 
     private static String formValue(String body, String name) {
