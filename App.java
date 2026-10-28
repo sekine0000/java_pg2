@@ -973,7 +973,9 @@ public class App {
             return;
         }
 
-        if (path.equals("/add") && method.equals("POST")) {
+        if (path.equals("/home") && method.equals("GET")) {
+            send(exchange, 200, "text/html", createHomePage(user));
+        } else if (path.equals("/add") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             String title = formValue(body, "todo").trim();
             String deadline = formValue(body, "deadline").trim();
@@ -1042,6 +1044,14 @@ public class App {
             } else {
                 send(exchange, 200, "text/html", createGroupDetailPage(user, group, "", ""));
             }
+        } else if (path.equals("/groups/settings") && method.equals("GET")) {
+            Integer groupId = queryId(exchange);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) {
+                send(exchange, 404, "text/plain", "グループが見つかりません");
+            } else {
+                send(exchange, 200, "text/html", createGroupSettingsPage(user, group, "", ""));
+            }
         } else if (path.equals("/group-todos/add") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             Integer groupId = formInteger(body, "groupId");
@@ -1103,7 +1113,7 @@ public class App {
                         ? new ActionResult(false, "ユーザーIDは8桁の数字で入力してください")
                         : inviteToGroup(groupId, user.id(), targetUserId);
                 send(exchange, result.success() ? 200 : 400, "text/html",
-                        createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                        createGroupSettingsPage(user, group, result.success() ? "" : result.message(),
                                 result.success() ? result.message() : ""));
             }
         } else if (path.equals("/groups/request/decision") && method.equals("POST")) {
@@ -1122,7 +1132,7 @@ public class App {
                 send(exchange, result.success() ? 404 : 403, "text/plain", result.message());
             } else {
                 send(exchange, result.success() ? 200 : 403, "text/html",
-                        createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                        createGroupSettingsPage(user, group, result.success() ? "" : result.message(),
                                 result.success() ? result.message() : ""));
             }
         } else if (path.equals("/groups/update") && method.equals("POST")) {
@@ -1143,7 +1153,7 @@ public class App {
                 send(exchange, 403, "text/plain", result.message());
             } else {
                 send(exchange, result.success() ? 200 : 403, "text/html",
-                        createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                        createGroupSettingsPage(user, group, result.success() ? "" : result.message(),
                                 result.success() ? result.message() : ""));
             }
         } else if (path.equals("/groups/member/remove") && method.equals("POST")) {
@@ -1156,7 +1166,7 @@ public class App {
             Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
             if (group == null) send(exchange, 403, "text/plain", result.message());
             else send(exchange, result.success() ? 200 : 403, "text/html",
-                    createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                    createGroupSettingsPage(user, group, result.success() ? "" : result.message(),
                             result.success() ? result.message() : ""));
         } else if (path.equals("/groups/invite/cancel") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
@@ -1168,7 +1178,7 @@ public class App {
             Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
             if (group == null) send(exchange, 403, "text/plain", result.message());
             else send(exchange, result.success() ? 200 : 403, "text/html",
-                    createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                    createGroupSettingsPage(user, group, result.success() ? "" : result.message(),
                             result.success() ? result.message() : ""));
         } else if (path.equals("/groups/leader/transfer") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
@@ -1180,7 +1190,7 @@ public class App {
             Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
             if (group == null) send(exchange, 403, "text/plain", result.message());
             else send(exchange, result.success() ? 200 : 403, "text/html",
-                    createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                    createGroupSettingsPage(user, group, result.success() ? "" : result.message(),
                             result.success() ? result.message() : ""));
         } else if (path.equals("/groups/leave") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
@@ -1192,7 +1202,7 @@ public class App {
             } else {
                 Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
                 if (group == null) send(exchange, 403, "text/plain", result.message());
-                else send(exchange, 403, "text/html", createGroupDetailPage(user, group, result.message(), ""));
+                else send(exchange, 403, "text/html", createGroupSettingsPage(user, group, result.message(), ""));
             }
         } else if (path.equals("/groups/delete") && method.equals("GET")) {
             Integer groupId = queryId(exchange);
@@ -1340,7 +1350,7 @@ public class App {
                         """);
         int themeMarker = html.indexOf("THEME_VALUE");
         html.replace(themeMarker, themeMarker + "THEME_VALUE".length(), getUserTheme(user.id()));
-        html.append(escapeHtml(user.username())).append("のTodo</h1><span><a class='action done' href='/groups'>グループ</a> <a class='action edit' href='/settings'>設定</a> ")
+        html.append(escapeHtml(user.username())).append("のTodo</h1><span><a class='action done' href='/home'>選択画面</a> <a class='action edit' href='/settings'>設定</a> ")
                 .append("<form method='post' action='/logout' style='display:inline'><button type='submit' class='delete'>ログアウト</button></form></span></header>")
                 .append("""
                         <section class="operation-area" aria-labelledby="add-heading"><h2 id="add-heading">Todoを追加</h2>
@@ -1639,7 +1649,7 @@ public class App {
         SESSIONS.put(token, user);
         exchange.getResponseHeaders().add("Set-Cookie",
                 "session=" + token + "; Path=/; HttpOnly; SameSite=Lax");
-        redirectTo(exchange, "/");
+        redirectTo(exchange, "/home");
     }
 
     private static void endSession(HttpExchange exchange) {
@@ -1693,7 +1703,7 @@ public class App {
     private static String createSettingsPage(User user, String error, String message) throws SQLException {
         String theme = getUserTheme(user.id());
         return settingsPageStart("アカウント設定", theme)
-                + "<header><h1>アカウント設定</h1><a href='/'>Todoへ戻る</a></header>"
+                + "<header><h1>アカウント設定</h1><a href='/home'>選択画面へ戻る</a></header>"
                 + (error.isEmpty() ? "" : "<p class='notice error'>" + escapeHtml(error) + "</p>")
                 + (message.isEmpty() ? "" : "<p class='notice success'>" + escapeHtml(message) + "</p>")
                 + "<section><h2>ユーザーID</h2><p><strong>" + String.format("%08d", user.id())
@@ -1723,16 +1733,49 @@ public class App {
                 + "<script>const themeSelect=document.getElementById('theme');const themeStatus=document.getElementById('theme-status');themeSelect.addEventListener('change',async function(){const previous=document.documentElement.dataset.theme;document.documentElement.dataset.theme=this.value;themeStatus.textContent='保存中…';try{const response=await fetch('/settings/theme',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({theme:this.value})});if(!response.ok)throw new Error();themeStatus.textContent='表示設定を保存しました';}catch(error){document.documentElement.dataset.theme=previous;this.value=previous;themeStatus.textContent='保存できませんでした。もう一度お試しください';}});</script></main></body></html>";
     }
 
+    private static String createHomePage(User user) throws SQLException {
+        List<Todo> personalTodos = findAllTodos(user.id());
+        List<Group> groups = findGroupsForUser(user.id());
+        StringBuilder html = new StringBuilder(settingsPageStart("Todoの選択", getUserTheme(user.id())))
+                .append("<header class='page-header'><div><h1>").append(escapeHtml(user.username()))
+                .append("さんのTodo</h1><p class='page-description'>表示するリストを選んでください</p></div>")
+                .append("<div class='header-actions'><a class='button secondary' href='/settings'>設定</a>")
+                .append("<form method='post' action='/logout'><button class='danger' type='submit'>ログアウト</button></form></div></header>")
+                .append("<div class='list-choices'><section><h2>個人</h2>")
+                .append("<a class='list-choice' href='/'><span><strong>個人Todo</strong><small>")
+                .append(personalTodos.size()).append("件のTodo</small></span><span aria-hidden='true'>›</span></a></section>")
+                .append("<section><div class='section-heading'><h2>所属グループ</h2>")
+                .append("<a href='/groups'>グループの作成・参加</a></div>");
+        if (groups.isEmpty()) {
+            html.append("<p class='empty-choice'>所属しているグループはありません。</p>");
+        } else {
+            for (Group group : groups) {
+                int todoCount = findGroupTodos(group.id(), user.id()).size();
+                html.append("<a class='list-choice' href='/groups/detail?id=").append(group.id())
+                        .append("'>")
+                        .append("<span><strong>").append(escapeHtml(group.name())).append("</strong><small>")
+                        .append(todoCount).append("件のTodo・")
+                        .append("LEADER".equals(group.role()) ? "リーダー" : "一般メンバー")
+                        .append("</small></span><span aria-hidden='true'>›</span></a>");
+            }
+        }
+        return html.append("</section></div></main></body></html>").toString();
+    }
+
     private static String createGroupsPage(User user, String error, String message) throws SQLException {
         StringBuilder html = new StringBuilder(settingsPageStart("グループ", getUserTheme(user.id())))
-                .append("<header><h1>グループ</h1><a href='/'>Todoへ戻る</a></header>");
+                .append("<header class='page-header'><h1>").append(escapeHtml(user.username()))
+                .append("のグループ</h1>").append(accountNavigation()).append("</header>")
+                .append("<nav class='page-menu' aria-label='グループメニュー'>")
+                .append("<a href='#groups'>所属グループ</a><a href='#create'>新規作成</a>")
+                .append("<a href='#join'>参加申請</a><a href='#requests'>申請状況</a></nav>");
         if (!error.isEmpty()) {
             html.append("<p class='notice error'>").append(escapeHtml(error)).append("</p>");
         }
         if (!message.isEmpty()) {
             html.append("<p class='notice success'>").append(escapeHtml(message)).append("</p>");
         }
-        html.append("<section><h2>新しいグループを作成</h2>"
+        html.append("<section id='create'><h2>新しいグループを作成</h2>"
                 + "<form method='post' action='/groups/create'>"
                 + "<label for='group-name'>グループ名（必須）</label>"
                 + "<input id='group-name' name='name' maxlength='100' required>"
@@ -1740,12 +1783,12 @@ public class App {
                 + "<textarea id='group-description' name='description' maxlength='1000' "
                 + "style='width:100%;min-height:100px;padding:9px 11px;font:inherit'></textarea>"
                 + "<button>作成</button></form></section>"
-                + "<section><h2>グループへ参加申請</h2>"
+                + "<section id='join'><h2>グループへ参加申請</h2>"
                 + "<form method='post' action='/groups/join'>"
                 + "<label for='join-group-id'>参加するグループID</label>"
                 + "<input id='join-group-id' name='id' type='number' min='1' required>"
                 + "<button>参加申請を送る</button></form></section>"
-                + "<section><h2>所属グループ</h2>");
+                + "<section id='groups'><h2>所属グループ</h2>");
         List<Group> groups = findGroupsForUser(user.id());
         if (groups.isEmpty()) {
             html.append("<p>所属しているグループはありません。</p>");
@@ -1759,7 +1802,7 @@ public class App {
             }
             html.append("</ul>");
         }
-        html.append("</section><section><h2>自分の参加申請状況</h2>");
+        html.append("</section><section id='requests'><h2>自分の参加申請状況</h2>");
         List<MembershipRequest> joinRequests = findJoinRequestsForUser(user.id());
         if (joinRequests.isEmpty()) {
             html.append("<p>参加申請はありません。</p>");
@@ -1776,62 +1819,78 @@ public class App {
 
     private static String createGroupDetailPage(User user, Group group, String error, String message)
             throws SQLException {
-        StringBuilder html = new StringBuilder(settingsPageStart(group.name(), getUserTheme(user.id())))
-                .append("<header><h1>").append(escapeHtml(group.name()))
-                .append("</h1><a href='/groups'>一覧へ戻る</a></header>");
-        if (!error.isEmpty()) html.append("<p class='notice error'>").append(escapeHtml(error)).append("</p>");
-        if (!message.isEmpty()) html.append("<p class='notice success'>").append(escapeHtml(message)).append("</p>");
-        html.append("<section><h2>グループ情報</h2><p><strong>グループID:</strong> ")
-                .append(group.id()).append("</p><p><strong>説明:</strong> ")
-                .append(group.description().isEmpty() ? "（説明なし）" : escapeHtml(group.description()))
-                .append("</p><p><strong>あなたの役職:</strong> ")
-                .append("LEADER".equals(group.role()) ? "リーダー" : "一般メンバー")
-                .append("</p></section>");
         boolean leader = "LEADER".equals(group.role());
         List<Todo> groupTodos = findGroupTodos(group.id(), user.id());
-        html.append("<section><h2>グループTodo</h2>");
+        StringBuilder html = new StringBuilder(settingsPageStart(group.name() + "のTodo", getUserTheme(user.id())))
+                .append("<header class='page-header'><h1>").append(escapeHtml(group.name()))
+                .append("のTodo</h1><div class='header-actions'><a class='button' href='/home'>選択画面</a>")
+                .append("<a class='button secondary' href='/groups/settings?id=").append(group.id())
+                .append("'>グループ設定</a><form method='post' action='/logout'><button class='danger'>ログアウト</button></form></div></header>");
+        if (!error.isEmpty()) html.append("<p class='notice error'>").append(escapeHtml(error)).append("</p>");
+        if (!message.isEmpty()) html.append("<p class='notice success'>").append(escapeHtml(message)).append("</p>");
         if (leader) {
-            html.append("<form method='post' action='/group-todos/add'>")
+            html.append("<section><h2>Todoを追加</h2><form method='post' action='/group-todos/add'>")
                     .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
-                    .append("<label>タイトル</label><input name='title' maxlength='200' required>")
+                    .append("<label>やること</label><input name='title' maxlength='200' required>")
                     .append("<label>締め切り日</label><input name='deadline' type='date'>")
-                    .append("<label>カテゴリ</label><input name='category' maxlength='100' value='未分類'>")
-                    .append("<button>グループTodoを追加</button></form>");
+                    .append("<label>カテゴリ</label><input name='category' maxlength='100' placeholder='未入力は未分類'>")
+                    .append("<button>追加</button></form></section>");
         }
+        html.append("<section><h2>Todo一覧（").append(groupTodos.size()).append("件）</h2>");
         if (groupTodos.isEmpty()) {
-            html.append("<p>グループTodoはありません。</p>");
+            html.append("<p>やることは、いまゼロです</p>");
         } else {
             html.append("<ul>");
             for (Todo todo : groupTodos) {
-                html.append("<li><strong>").append(todo.done() ? "完了: " : "未完了: ")
-                        .append(escapeHtml(todo.title())).append("</strong><br>締め切り: ")
-                        .append(todo.deadline() == null || todo.deadline().isEmpty() ? "なし" : escapeHtml(todo.deadline()))
-                        .append(" / カテゴリ: ").append(escapeHtml(normalizedCategory(todo.category())))
-                        .append("<form method='post' action='/group-todos/done'>")
+                html.append("<li><span class='todo-title'><strong>")
+                        .append(todo.done() ? "完了: " : "未完了: ").append(escapeHtml(todo.title()))
+                        .append("</strong><br>カテゴリ: ").append(escapeHtml(normalizedCategory(todo.category())))
+                        .append("<br>締め切り日: ")
+                        .append(todo.deadline() == null || todo.deadline().isEmpty() ? "未設定" : escapeHtml(todo.deadline()))
+                        .append("</span><form method='post' action='/group-todos/done'>")
                         .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
                         .append("<input type='hidden' name='todoId' value='").append(todo.id()).append("'>")
-                        .append("<button>").append(todo.done() ? "未完了に戻す" : "完了にする").append("</button></form>");
+                        .append("<button>").append(todo.done() ? "未完了に戻す" : "完了").append("</button></form>");
                 if (leader) {
                     html.append("<details><summary>編集</summary><form method='post' action='/group-todos/edit'>")
                             .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
                             .append("<input type='hidden' name='todoId' value='").append(todo.id()).append("'>")
-                            .append("<label>タイトル</label><input name='title' maxlength='200' required value='")
-                            .append(escapeHtml(todo.title())).append("'><label>締め切り日</label>")
-                            .append("<input name='deadline' type='date' value='")
-                            .append(escapeHtml(todo.deadline() == null ? "" : todo.deadline())).append("'>")
-                            .append("<label>カテゴリ</label><input name='category' maxlength='100' value='")
+                            .append("<label>やること</label><input name='title' maxlength='200' required value='")
+                            .append(escapeHtml(todo.title())).append("'><label>締め切り日</label><input name='deadline' type='date' value='")
+                            .append(escapeHtml(todo.deadline() == null ? "" : todo.deadline()))
+                            .append("'><label>カテゴリ</label><input name='category' maxlength='100' value='")
                             .append(escapeHtml(normalizedCategory(todo.category())))
-                            .append("'><button>編集を保存</button></form></details>")
-                            .append("<a class='button danger' href='/group-todos/delete?groupId=")
-                            .append(group.id()).append("&todoId=").append(todo.id()).append("'>削除の確認へ</a>");
+                            .append("'><button>保存</button></form></details><a class='button danger' href='/group-todos/delete?groupId=")
+                            .append(group.id()).append("&todoId=").append(todo.id()).append("'>削除</a>");
                 }
                 html.append("</li>");
             }
             html.append("</ul>");
         }
-        html.append("</section>");
+        return html.append("</section></main></body></html>").toString();
+    }
+
+    private static String createGroupSettingsPage(User user, Group group, String error, String message)
+            throws SQLException {
+        StringBuilder html = new StringBuilder(settingsPageStart(group.name(), getUserTheme(user.id())))
+                .append("<header class='page-header'><h1>").append(escapeHtml(group.name()))
+                .append("</h1>").append(accountNavigation()).append("</header>")
+                .append("<nav class='page-menu' aria-label='グループ設定メニュー'>")
+                .append("<a href='/groups/detail?id=").append(group.id()).append("'>Todo一覧</a><a href='/groups'>グループ一覧</a>")
+                .append("<a href='#members'>メンバー</a><a href='#invite'>招待</a>")
+                .append("LEADER".equals(group.role())
+                        ? "<a href='#group-settings'>グループ管理</a></nav>"
+                        : "<a href='#overview'>グループ情報</a></nav>");
+        if (!error.isEmpty()) html.append("<p class='notice error'>").append(escapeHtml(error)).append("</p>");
+        if (!message.isEmpty()) html.append("<p class='notice success'>").append(escapeHtml(message)).append("</p>");
+        html.append("<section id='overview'><h2>グループ情報</h2><p><strong>グループID:</strong> ")
+                .append(group.id()).append("</p><p><strong>説明:</strong> ")
+                .append(group.description().isEmpty() ? "（説明なし）" : escapeHtml(group.description()))
+                .append("</p><p><strong>あなたの役職:</strong> ")
+                .append("LEADER".equals(group.role()) ? "リーダー" : "一般メンバー")
+                .append("</p></section>");
         if ("LEADER".equals(group.role())) {
-            html.append("<section><h2>グループ情報を変更</h2><form method='post' action='/groups/update'>")
+            html.append("<section id='group-settings'><h2>グループ情報を変更</h2><form method='post' action='/groups/update'>")
                     .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
                     .append("<label for='edit-group-name'>グループ名</label>")
                     .append("<input id='edit-group-name' name='name' maxlength='100' required value='")
@@ -1842,7 +1901,7 @@ public class App {
                     .append(escapeHtml(group.description())).append("</textarea><button>変更を保存</button></form></section>");
         }
         List<GroupMember> members = findGroupMembers(group.id(), user.id());
-        html.append("<section><h2>メンバー一覧</h2><ul>");
+        html.append("<section id='members'><h2>メンバー一覧</h2><ul>");
         for (GroupMember member : members) {
             html.append("<li><strong>").append(escapeHtml(member.username())).append("</strong>（ID: ")
                     .append(member.userId()).append("）— ")
@@ -1855,7 +1914,7 @@ public class App {
             }
             html.append("</li>");
         }
-        html.append("</ul></section><section><h2>ユーザーを招待</h2>")
+        html.append("</ul></section><section id='invite'><h2>ユーザーを招待</h2>")
                 .append("<p>").append("LEADER".equals(group.role())
                         ? "リーダーからの招待は、すぐにメンバーへ追加されます。"
                         : "一般メンバーからの招待は、リーダーの承認後に追加されます。")
@@ -1970,8 +2029,16 @@ public class App {
     private static String settingsPageStart(String title, String theme) {
         return "<!doctype html><html lang='ja' data-theme='" + theme + "'><head><meta charset='UTF-8'>"
                 + "<meta name='viewport' content='width=device-width,initial-scale=1'><title>" + title + "</title>"
-                + "<style>*{box-sizing:border-box}html{background:#f6f8fa}body{max-width:680px;margin:24px auto;padding:0 20px 32px;font-family:system-ui,sans-serif;color:#24292f;line-height:1.5}main>header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px}h2{margin-top:0;font-size:18px}section{margin:12px 0;padding:18px;border:1px solid #d0d7de;border-radius:10px;background:#fff}label{display:block;margin:12px 0 5px}input,select{width:100%;height:42px;padding:9px 11px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f;font:inherit}button,.button{display:inline-flex;min-height:42px;align-items:center;justify-content:center;margin-top:14px;padding:9px 14px;border:0;border-radius:6px;background:#1f883d;color:#fff;font:inherit;font-weight:600;text-decoration:none;cursor:pointer}.danger-zone{border-color:#cf222e}.danger{background:#cf222e}.secondary{border:1px solid #afb8c1;background:#fff;color:#24292f}.notice{padding:10px;border-radius:6px}.error{background:#ffebe9;color:#cf222e}.success{background:#dafbe1;color:#116329}.theme-status{min-height:24px;margin:8px 0 0;color:#57606a}.confirmation-actions{display:flex;gap:10px}.confirmation-actions form{margin:0}.confirmation-actions .button,.confirmation-actions button{margin-top:8px}[data-theme='dark']{color-scheme:dark;background:#0d1117}[data-theme='dark'] body{color:#e6edf3}[data-theme='dark'] section{border-color:#30363d;background:#161b22}[data-theme='dark'] input,[data-theme='dark'] select{border-color:#6e7681;background:#0d1117;color:#e6edf3}[data-theme='dark'] a{color:#58a6ff}[data-theme='dark'] .secondary{border-color:#6e7681;background:#21262d;color:#e6edf3}[data-theme='dark'] .danger-zone{border-color:#f85149}[data-theme='dark'] .error{background:#3d1515;color:#ff7b72}[data-theme='dark'] .success{background:#12261e;color:#56d364}[data-theme='dark'] .theme-status{color:#8b949e}@media(max-width:480px){main>header{align-items:flex-start;flex-direction:column}.confirmation-actions{align-items:stretch;flex-direction:column}.confirmation-actions form,.confirmation-actions button,.confirmation-actions .button{width:100%}}</style>"
+                + "<style>*{box-sizing:border-box}html{background:#f6f8fa;scroll-behavior:smooth}body{max-width:800px;margin:24px auto;padding:0 20px 32px;font-family:system-ui,sans-serif;color:#24292f;line-height:1.5}main>header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:26px}.header-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px}.header-actions form{margin:0}.header-actions .button,.header-actions button{min-height:42px;margin:0}.page-menu{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0}.page-menu a{display:inline-flex;min-height:38px;align-items:center;padding:7px 12px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#0969da;font-weight:600;text-decoration:none}.page-menu a:hover{border-color:#0969da;background:#f3f4f6}h2{margin-top:0;font-size:18px}section{margin:12px 0;padding:18px;border:1px solid #d0d7de;border-radius:10px;background:#fff;scroll-margin-top:12px}label{display:block;margin:12px 0 5px}input,select{width:100%;height:42px;padding:9px 11px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f;font:inherit}button,.button{display:inline-flex;min-height:42px;align-items:center;justify-content:center;margin-top:14px;padding:9px 14px;border:0;border-radius:6px;background:#1f883d;color:#fff;font:inherit;font-weight:600;text-decoration:none;cursor:pointer}.danger-zone{border-color:#cf222e}.danger{background:#cf222e}.secondary{border:1px solid #afb8c1;background:#fff;color:#24292f}.notice{padding:10px;border-radius:6px}.error{background:#ffebe9;color:#cf222e}.success{background:#dafbe1;color:#116329}.theme-status{min-height:24px;margin:8px 0 0;color:#57606a}.confirmation-actions{display:flex;gap:10px}.confirmation-actions form{margin:0}.confirmation-actions .button,.confirmation-actions button{margin-top:8px}[data-theme='dark']{color-scheme:dark;background:#0d1117}[data-theme='dark'] body{color:#e6edf3}[data-theme='dark'] section,[data-theme='dark'] .page-menu a{border-color:#30363d;background:#161b22}[data-theme='dark'] .page-menu a{color:#58a6ff}[data-theme='dark'] .page-menu a:hover{border-color:#58a6ff;background:#21262d}[data-theme='dark'] input,[data-theme='dark'] select{border-color:#6e7681;background:#0d1117;color:#e6edf3}[data-theme='dark'] a{color:#58a6ff}[data-theme='dark'] .secondary{border-color:#6e7681;background:#21262d;color:#e6edf3}[data-theme='dark'] .danger-zone{border-color:#f85149}[data-theme='dark'] .error{background:#3d1515;color:#ff7b72}[data-theme='dark'] .success{background:#12261e;color:#56d364}[data-theme='dark'] .theme-status{color:#8b949e}@media(max-width:600px){body{margin:16px auto;padding:0 12px 24px}main>header{align-items:flex-start;flex-direction:column}.header-actions{width:100%;justify-content:flex-start}.header-actions .button,.header-actions form,.header-actions button{flex:1}.page-menu{display:grid;grid-template-columns:1fr 1fr}.page-menu a{justify-content:center}.confirmation-actions{align-items:stretch;flex-direction:column}.confirmation-actions form,.confirmation-actions button,.confirmation-actions .button{width:100%}}</style>"
+                + "<style>.page-description{margin:4px 0 0;color:#57606a}.list-choices{display:grid;gap:12px;margin-top:18px}.list-choices section{margin:0}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.list-choice{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:8px;padding:14px;border:1px solid #d0d7de;border-radius:8px;color:#24292f;text-decoration:none}.list-choice:hover{border-color:#0969da;background:#f6f8fa}.list-choice span:first-child{display:grid;gap:3px}.list-choice small{color:#57606a}.list-choice span:last-child{color:#0969da;font-size:28px;line-height:1}.empty-choice{margin-bottom:0;color:#57606a}[data-theme='dark'] .page-description,[data-theme='dark'] .list-choice small,[data-theme='dark'] .empty-choice{color:#8b949e}[data-theme='dark'] .list-choice{border-color:#30363d;color:#e6edf3}[data-theme='dark'] .list-choice:hover{border-color:#58a6ff;background:#21262d}@media(max-width:600px){.section-heading{align-items:flex-start;flex-direction:column}}</style>"
                 + "</head><body><main>";
+    }
+
+    private static String accountNavigation() {
+        return "<div class='header-actions'><a class='button' href='/home'>選択画面</a>"
+                + "<a class='button' href='/'>個人Todo</a>"
+                + "<a class='button secondary' href='/settings'>設定</a>"
+                + "<form method='post' action='/logout'><button class='danger' type='submit'>ログアウト</button></form></div>";
     }
 
     private static void redirectTo(HttpExchange exchange, String location) throws IOException {
