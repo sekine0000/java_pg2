@@ -219,6 +219,9 @@ public class App {
                         """);
         html.append("<input type='hidden' name='filter' value='").append(filter).append("'>")
                 .append("<input type='hidden' name='sort' value='").append(sort).append("'></form>")
+                .append("<form method='get' action='/search'>")
+                .append("<input name='q' placeholder='キーワードで検索' value='")
+                .append(escapeHtml(keyword)).append("'><button>検索</button></form>")
                 .append("<nav><a href='/?filter=all&sort=").append(sort).append("'>全部</a> | ")
                 .append("<a href='/?filter=active&sort=").append(sort).append("'>未完了だけ</a> | ")
                 .append("<a href='/?filter=done&sort=").append(sort).append("'>完了だけ</a></nav>")
