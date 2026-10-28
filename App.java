@@ -27,8 +27,11 @@ import java.text.Collator;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList; // ★ SELECT結果の保持用に追加
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List; // ★ SELECT結果の保持用に追加
 import java.util.Locale;
+import java.util.Set;
 
 public class App {
     private static final String DB_URL = "jdbc:sqlite:todos.db"; // ★ CSVではなくSQLiteへ接続
@@ -41,9 +44,22 @@ public class App {
 
     private record User(int id, String username) {
     }
+    private record Group(int id, String name, String description, int leaderUserId, String role) {
+    }
+    private record GroupMember(int userId, String username, String role) {
+    }
+    private record MembershipRequest(int id, int groupId, String groupName, String type, String status,
+            String requesterName, String targetName) {
+    }
+    private record ActionResult(boolean success, String message) {
+    }
 
     private static Connection connect() throws SQLException { // ★ DB接続処理へ変更
-        return DriverManager.getConnection(DB_URL); // ★ todos.dbへ接続
+        Connection connection = DriverManager.getConnection(DB_URL); // ★ todos.dbへ接続
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("PRAGMA foreign_keys = ON");
+        }
+        return connection;
     }
 
     private static void initializeDatabase() throws SQLException, IOException, GeneralSecurityException { // ★ DB初期化を追加
@@ -62,6 +78,36 @@ public class App {
             }
             statement.execute(sql); // ★ todos表がなければ作成
             statement.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL)");
+            statement.execute("CREATE TABLE IF NOT EXISTS groups ("
+                    + "id INTEGER PRIMARY KEY, name TEXT NOT NULL CHECK(length(trim(name)) > 0), "
+                    + "description TEXT NOT NULL DEFAULT '', leader_user_id INTEGER NOT NULL, "
+                    + "FOREIGN KEY (leader_user_id) REFERENCES users(id) ON DELETE RESTRICT)");
+            statement.execute("CREATE TABLE IF NOT EXISTS group_members ("
+                    + "group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
+                    + "role TEXT NOT NULL CHECK(role IN ('LEADER', 'MEMBER')), "
+                    + "PRIMARY KEY (group_id, user_id), "
+                    + "FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE, "
+                    + "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)");
+            statement.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_leader_per_group "
+                    + "ON group_members(group_id) WHERE role = 'LEADER'");
+            statement.execute("CREATE TABLE IF NOT EXISTS group_membership_requests ("
+                    + "id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL, "
+                    + "type TEXT NOT NULL CHECK(type IN ('MEMBER_INVITE', 'JOIN_REQUEST')), "
+                    + "requester_user_id INTEGER NOT NULL, target_user_id INTEGER NOT NULL, "
+                    + "status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'APPROVED', 'REJECTED')), "
+                    + "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, decided_at TEXT, "
+                    + "FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE, "
+                    + "FOREIGN KEY (requester_user_id) REFERENCES users(id) ON DELETE CASCADE, "
+                    + "FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE)");
+            statement.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_pending_membership_request "
+                    + "ON group_membership_requests(group_id, target_user_id) WHERE status = 'PENDING'");
+            statement.execute("CREATE TABLE IF NOT EXISTS group_todos ("
+                    + "id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL, title TEXT NOT NULL, "
+                    + "done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0, 1)), deadline TEXT, "
+                    + "category TEXT NOT NULL DEFAULT '未分類', "
+                    + "FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE)");
+            statement.execute("CREATE INDEX IF NOT EXISTS group_todos_by_group ON group_todos(group_id, id)");
+            statement.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
             boolean hasTheme = false;
             try (ResultSet columns = statement.executeQuery("PRAGMA table_info(users)")) {
                 while (columns.next()) {
@@ -117,14 +163,12 @@ public class App {
                         defaultUserId = result.getInt("id");
                     } else {
                         try (PreparedStatement createUser = connection.prepareStatement(
-                                "INSERT INTO users (username, password_hash) VALUES (?, ?)", Statement.RETURN_GENERATED_KEYS)) {
-                            createUser.setString(1, "わたし");
-                            createUser.setString(2, hashPassword("0000"));
+                                "INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)")) {
+                            defaultUserId = generateAvailableUserId(connection);
+                            createUser.setInt(1, defaultUserId);
+                            createUser.setString(2, "わたし");
+                            createUser.setString(3, hashPassword("0000"));
                             createUser.executeUpdate();
-                            try (ResultSet keys = createUser.getGeneratedKeys()) {
-                                keys.next();
-                                defaultUserId = keys.getInt(1);
-                            }
                         }
                     }
                 }
@@ -133,6 +177,122 @@ public class App {
                 migrate.setInt(1, defaultUserId);
                 migrate.executeUpdate();
             }
+        }
+        migrateExistingIdsToEightDigits();
+    }
+
+    private static int generateAvailableUserId(Connection connection) throws SQLException {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            int candidate = 10_000_000 + RANDOM.nextInt(90_000_000);
+            try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM users WHERE id = ?")) {
+                statement.setInt(1, candidate);
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) return candidate;
+                }
+            }
+        }
+        throw new SQLException("一意なユーザーIDを生成できませんでした");
+    }
+
+    private static void migrateExistingIdsToEightDigits() throws SQLException {
+        try (Connection connection = DriverManager.getConnection(DB_URL);
+                Statement pragma = connection.createStatement()) {
+            pragma.execute("PRAGMA foreign_keys = OFF");
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement check = connection.prepareStatement(
+                        "SELECT 1 FROM app_meta WHERE key = 'random_eight_digit_ids_v1'");
+                        ResultSet result = check.executeQuery()) {
+                    if (result.next()) {
+                        connection.rollback();
+                        return;
+                    }
+                }
+
+                Map<Integer, Integer> userIds = createIdMap(connection, "users");
+                Map<Integer, Integer> groupIds = createIdMap(connection, "groups");
+                updateReferences(connection, userIds, "todos", "user_id");
+                updateReferences(connection, userIds, "groups", "leader_user_id");
+                updateReferences(connection, userIds, "group_members", "user_id");
+                updateReferences(connection, userIds, "group_membership_requests", "requester_user_id");
+                updateReferences(connection, userIds, "group_membership_requests", "target_user_id");
+                updatePrimaryIds(connection, userIds, "users");
+
+                updateReferences(connection, groupIds, "group_members", "group_id");
+                updateReferences(connection, groupIds, "group_membership_requests", "group_id");
+                updateReferences(connection, groupIds, "group_todos", "group_id");
+                updatePrimaryIds(connection, groupIds, "groups");
+
+                try (PreparedStatement mark = connection.prepareStatement(
+                        "INSERT INTO app_meta (key, value) VALUES ('random_eight_digit_ids_v1', 'done')")) {
+                    mark.executeUpdate();
+                }
+                try (ResultSet violation = pragma.executeQuery("PRAGMA foreign_key_check")) {
+                    if (violation.next()) throw new SQLException("ID移行後の参照整合性を確認できませんでした");
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                pragma.execute("PRAGMA foreign_keys = ON");
+            }
+        }
+    }
+
+    private static Map<Integer, Integer> createIdMap(Connection connection, String table) throws SQLException {
+        Map<Integer, Integer> ids = new HashMap<>();
+        Set<Integer> generated = new HashSet<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet result = statement.executeQuery("SELECT id FROM " + table)) {
+            while (result.next()) {
+                int candidate;
+                do {
+                    candidate = 10_000_000 + RANDOM.nextInt(90_000_000);
+                } while (!generated.add(candidate));
+                ids.put(result.getInt("id"), candidate);
+            }
+        }
+        return ids;
+    }
+
+    private static void updateReferences(Connection connection, Map<Integer, Integer> ids,
+            String table, String column) throws SQLException {
+        try (PreparedStatement makeTemporary = connection.prepareStatement(
+                "UPDATE " + table + " SET " + column + " = -" + column + " WHERE " + column + " = ?");
+                PreparedStatement assignFinal = connection.prepareStatement(
+                        "UPDATE " + table + " SET " + column + " = ? WHERE " + column + " = ?")) {
+            for (Integer oldId : ids.keySet()) {
+                makeTemporary.setInt(1, oldId);
+                makeTemporary.addBatch();
+            }
+            makeTemporary.executeBatch();
+            for (Map.Entry<Integer, Integer> entry : ids.entrySet()) {
+                assignFinal.setInt(1, entry.getValue());
+                assignFinal.setInt(2, -entry.getKey());
+                assignFinal.addBatch();
+            }
+            assignFinal.executeBatch();
+        }
+    }
+
+    private static void updatePrimaryIds(Connection connection, Map<Integer, Integer> ids, String table)
+            throws SQLException {
+        try (PreparedStatement makeTemporary = connection.prepareStatement(
+                "UPDATE " + table + " SET id = -id WHERE id = ?");
+                PreparedStatement assignFinal = connection.prepareStatement(
+                        "UPDATE " + table + " SET id = ? WHERE id = ?")) {
+            for (Integer oldId : ids.keySet()) {
+                makeTemporary.setInt(1, oldId);
+                makeTemporary.addBatch();
+            }
+            makeTemporary.executeBatch();
+            for (Map.Entry<Integer, Integer> entry : ids.entrySet()) {
+                assignFinal.setInt(1, entry.getValue());
+                assignFinal.setInt(2, -entry.getKey());
+                assignFinal.addBatch();
+            }
+            assignFinal.executeBatch();
         }
     }
 
@@ -232,6 +392,503 @@ public class App {
             }
         }
         return todos; // ★ DBから取得した一覧を返す
+    }
+
+    private static List<Todo> findGroupTodos(int groupId, int userId) throws SQLException {
+        List<Todo> todos = new ArrayList<>();
+        String sql = "SELECT gt.id, gt.title, gt.done, gt.deadline, gt.category "
+                + "FROM group_todos gt JOIN group_members gm ON gm.group_id = gt.group_id "
+                + "WHERE gt.group_id = ? AND gm.user_id = ? ORDER BY gt.id";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, userId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    todos.add(new Todo(result.getInt("id"), result.getString("title"),
+                            result.getInt("done") != 0, result.getString("deadline"),
+                            result.getString("category")));
+                }
+            }
+        }
+        return todos;
+    }
+
+    private static ActionResult addGroupTodo(int groupId, int userId, String title, String deadline,
+            String category) throws SQLException {
+        String sql = "INSERT INTO group_todos (group_id, title, done, deadline, category) "
+                + "SELECT ?, ?, 0, ?, ? WHERE EXISTS (SELECT 1 FROM group_members "
+                + "WHERE group_id = ? AND user_id = ? AND role = 'LEADER')";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, groupId); statement.setString(2, title); statement.setString(3, deadline);
+            statement.setString(4, category); statement.setInt(5, groupId); statement.setInt(6, userId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "グループTodoを追加しました")
+                    : new ActionResult(false, "グループTodoを追加する権限がありません");
+        }
+    }
+
+    private static ActionResult editGroupTodo(int groupId, int todoId, int userId, String title,
+            String deadline, String category) throws SQLException {
+        String sql = "UPDATE group_todos SET title = ?, deadline = ?, category = ? "
+                + "WHERE id = ? AND group_id = ? AND EXISTS (SELECT 1 FROM group_members "
+                + "WHERE group_id = ? AND user_id = ? AND role = 'LEADER')";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, title); statement.setString(2, deadline); statement.setString(3, category);
+            statement.setInt(4, todoId); statement.setInt(5, groupId); statement.setInt(6, groupId);
+            statement.setInt(7, userId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "グループTodoを編集しました")
+                    : new ActionResult(false, "グループTodoを編集する権限がないか、Todoが存在しません");
+        }
+    }
+
+    private static ActionResult toggleGroupTodo(int groupId, int todoId, int userId) throws SQLException {
+        String sql = "UPDATE group_todos SET done = CASE done WHEN 0 THEN 1 ELSE 0 END "
+                + "WHERE id = ? AND group_id = ? AND EXISTS (SELECT 1 FROM group_members "
+                + "WHERE group_id = ? AND user_id = ?)";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, todoId); statement.setInt(2, groupId); statement.setInt(3, groupId);
+            statement.setInt(4, userId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "完了状態を変更しました")
+                    : new ActionResult(false, "このグループTodoを変更する権限がありません");
+        }
+    }
+
+    private static ActionResult deleteGroupTodo(int groupId, int todoId, int userId) throws SQLException {
+        String sql = "DELETE FROM group_todos WHERE id = ? AND group_id = ? AND EXISTS "
+                + "(SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ? AND role = 'LEADER')";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, todoId); statement.setInt(2, groupId); statement.setInt(3, groupId);
+            statement.setInt(4, userId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "グループTodoを削除しました")
+                    : new ActionResult(false, "グループTodoを削除する権限がないか、Todoが存在しません");
+        }
+    }
+
+    private static void createGroup(int userId, String name, String description) throws SQLException {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement insertGroup = connection.prepareStatement(
+                    "INSERT OR IGNORE INTO groups (id, name, description, leader_user_id) VALUES (?, ?, ?, ?)");
+                    PreparedStatement insertMember = connection.prepareStatement(
+                            "INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'LEADER')")) {
+                int groupId = 0;
+                for (int attempt = 0; attempt < 20; attempt++) {
+                    int candidate = 10_000_000 + RANDOM.nextInt(90_000_000);
+                    insertGroup.setInt(1, candidate);
+                    insertGroup.setString(2, name);
+                    insertGroup.setString(3, description);
+                    insertGroup.setInt(4, userId);
+                    if (insertGroup.executeUpdate() == 1) {
+                        groupId = candidate;
+                        break;
+                    }
+                }
+                if (groupId == 0) {
+                    throw new SQLException("一意なグループIDを生成できませんでした");
+                }
+                insertMember.setInt(1, groupId);
+                insertMember.setInt(2, userId);
+                insertMember.executeUpdate();
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        }
+    }
+
+    private static List<Group> findGroupsForUser(int userId) throws SQLException {
+        List<Group> groups = new ArrayList<>();
+        String sql = "SELECT g.id, g.name, g.description, g.leader_user_id, gm.role "
+                + "FROM groups g JOIN group_members gm ON gm.group_id = g.id "
+                + "WHERE gm.user_id = ? ORDER BY g.id DESC";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, userId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    groups.add(new Group(result.getInt("id"), result.getString("name"),
+                            result.getString("description"), result.getInt("leader_user_id"),
+                            result.getString("role")));
+                }
+            }
+        }
+        return groups;
+    }
+
+    private static Group findGroupForMember(int groupId, int userId) throws SQLException {
+        String sql = "SELECT g.id, g.name, g.description, g.leader_user_id, gm.role "
+                + "FROM groups g JOIN group_members gm ON gm.group_id = g.id "
+                + "WHERE g.id = ? AND gm.user_id = ?";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, userId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? new Group(result.getInt("id"), result.getString("name"),
+                        result.getString("description"), result.getInt("leader_user_id"),
+                        result.getString("role")) : null;
+            }
+        }
+    }
+
+    private static String findGroupRole(Connection connection, int groupId, int userId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT role FROM group_members WHERE group_id = ? AND user_id = ?")) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, userId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? result.getString("role") : null;
+            }
+        }
+    }
+
+    private static boolean isGroupLeader(Connection connection, int groupId, int userId) throws SQLException {
+        return "LEADER".equals(findGroupRole(connection, groupId, userId));
+    }
+
+    private static boolean leadsAnyGroup(int userId) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM groups WHERE leader_user_id = ? LIMIT 1")) {
+            statement.setInt(1, userId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
+            }
+        }
+    }
+
+    private static List<GroupMember> findGroupMembers(int groupId, int memberUserId) throws SQLException {
+        List<GroupMember> members = new ArrayList<>();
+        String sql = "SELECT member.user_id, u.username, member.role "
+                + "FROM group_members member JOIN users u ON u.id = member.user_id "
+                + "WHERE member.group_id = ? AND EXISTS (SELECT 1 FROM group_members viewer "
+                + "WHERE viewer.group_id = member.group_id AND viewer.user_id = ?) "
+                + "ORDER BY CASE member.role WHEN 'LEADER' THEN 0 ELSE 1 END, u.username";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, memberUserId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    members.add(new GroupMember(result.getInt("user_id"), result.getString("username"),
+                            result.getString("role")));
+                }
+            }
+        }
+        return members;
+    }
+
+    private static ActionResult updateGroup(int groupId, int leaderUserId, String name, String description)
+            throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "UPDATE groups SET name = ?, description = ? WHERE id = ? AND leader_user_id = ?")) {
+            statement.setString(1, name);
+            statement.setString(2, description);
+            statement.setInt(3, groupId);
+            statement.setInt(4, leaderUserId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "グループ情報を変更しました")
+                    : new ActionResult(false, "グループ情報を変更する権限がありません");
+        }
+    }
+
+    private static ActionResult removeGroupMember(int groupId, int leaderUserId, int targetUserId)
+            throws SQLException {
+        if (leaderUserId == targetUserId) {
+            return new ActionResult(false, "リーダー自身はメンバーから削除できません");
+        }
+        String sql = "DELETE FROM group_members WHERE group_id = ? AND user_id = ? AND role = 'MEMBER' "
+                + "AND EXISTS (SELECT 1 FROM groups WHERE id = ? AND leader_user_id = ?)";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, targetUserId);
+            statement.setInt(3, groupId);
+            statement.setInt(4, leaderUserId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "メンバーを削除しました")
+                    : new ActionResult(false, "対象メンバーがいないか、削除する権限がありません");
+        }
+    }
+
+    private static ActionResult cancelGroupInvite(int groupId, int requestId, int leaderUserId)
+            throws SQLException {
+        String sql = "UPDATE group_membership_requests SET status = 'REJECTED', decided_at = CURRENT_TIMESTAMP "
+                + "WHERE id = ? AND group_id = ? AND type = 'MEMBER_INVITE' AND status = 'PENDING' "
+                + "AND EXISTS (SELECT 1 FROM groups WHERE id = ? AND leader_user_id = ?)";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, requestId);
+            statement.setInt(2, groupId);
+            statement.setInt(3, groupId);
+            statement.setInt(4, leaderUserId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "招待を取り消しました")
+                    : new ActionResult(false, "取り消せる承認待ちの招待がないか、権限がありません");
+        }
+    }
+
+    private static ActionResult transferGroupLeadership(int groupId, int leaderUserId, int targetUserId)
+            throws SQLException {
+        if (leaderUserId == targetUserId) {
+            return new ActionResult(false, "現在のリーダー以外の一般メンバーを選択してください");
+        }
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                if (!isGroupLeader(connection, groupId, leaderUserId)) {
+                    return rollbackResult(connection, "リーダー権限を引き継ぐ権限がありません");
+                }
+                boolean validTarget;
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "SELECT 1 FROM groups g JOIN group_members gm ON gm.group_id = g.id "
+                                + "WHERE g.id = ? AND g.leader_user_id = ? AND gm.user_id = ? AND gm.role = 'MEMBER'")) {
+                    statement.setInt(1, groupId);
+                    statement.setInt(2, leaderUserId);
+                    statement.setInt(3, targetUserId);
+                    try (ResultSet result = statement.executeQuery()) { validTarget = result.next(); }
+                }
+                if (!validTarget) return rollbackResult(connection, "引き継ぎ先は所属中の一般メンバーに限ります");
+                try (PreparedStatement demote = connection.prepareStatement(
+                            "UPDATE group_members SET role = 'MEMBER' WHERE group_id = ? AND user_id = ? AND role = 'LEADER'");
+                        PreparedStatement promote = connection.prepareStatement(
+                            "UPDATE group_members SET role = 'LEADER' WHERE group_id = ? AND user_id = ? AND role = 'MEMBER'");
+                        PreparedStatement updateGroup = connection.prepareStatement(
+                            "UPDATE groups SET leader_user_id = ? WHERE id = ? AND leader_user_id = ?")) {
+                    demote.setInt(1, groupId); demote.setInt(2, leaderUserId);
+                    promote.setInt(1, groupId); promote.setInt(2, targetUserId);
+                    updateGroup.setInt(1, targetUserId); updateGroup.setInt(2, groupId); updateGroup.setInt(3, leaderUserId);
+                    if (demote.executeUpdate() != 1 || promote.executeUpdate() != 1 || updateGroup.executeUpdate() != 1) {
+                        throw new SQLException("リーダー変更中にグループの状態が変わりました");
+                    }
+                }
+                connection.commit();
+                return new ActionResult(true, "リーダー権限を引き継ぎました");
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        }
+    }
+
+    private static ActionResult leaveGroup(int groupId, int userId) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM group_members WHERE group_id = ? AND user_id = ? AND role = 'MEMBER'")) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, userId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "グループから脱退しました")
+                    : new ActionResult(false, "リーダーは権限を引き継ぐまで脱退できません");
+        }
+    }
+
+    private static ActionResult deleteGroup(int groupId, int leaderUserId) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM groups WHERE id = ? AND leader_user_id = ?")) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, leaderUserId);
+            return statement.executeUpdate() == 1
+                    ? new ActionResult(true, "グループを削除しました")
+                    : new ActionResult(false, "グループを削除する権限がありません");
+        }
+    }
+
+    private static ActionResult inviteToGroup(int groupId, int actorUserId, int targetUserId) throws SQLException {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                String role = findGroupRole(connection, groupId, actorUserId);
+                if (role == null) return rollbackResult(connection, "所属していないグループには招待できません");
+
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "SELECT 1 FROM users WHERE id = ?")) {
+                    statement.setInt(1, targetUserId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) return rollbackResult(connection, "指定されたユーザーIDは存在しません");
+                    }
+                }
+                if (isGroupMember(connection, groupId, targetUserId)) {
+                    return rollbackResult(connection, "そのユーザーはすでに所属しています");
+                }
+                if (hasPendingRequest(connection, groupId, targetUserId)) {
+                    return rollbackResult(connection, "そのユーザーについて有効な招待または参加申請があります");
+                }
+
+                if ("LEADER".equals(role)) {
+                    try (PreparedStatement statement = connection.prepareStatement(
+                            "INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'MEMBER')")) {
+                        statement.setInt(1, groupId);
+                        statement.setInt(2, targetUserId);
+                        statement.executeUpdate();
+                    }
+                    connection.commit();
+                    return new ActionResult(true, "ユーザーをグループへ追加しました");
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "INSERT INTO group_membership_requests "
+                                + "(group_id, type, requester_user_id, target_user_id) "
+                                + "VALUES (?, 'MEMBER_INVITE', ?, ?)")) {
+                    statement.setInt(1, groupId);
+                    statement.setInt(2, actorUserId);
+                    statement.setInt(3, targetUserId);
+                    statement.executeUpdate();
+                }
+                connection.commit();
+                return new ActionResult(true, "リーダーへ招待の承認依頼を送りました");
+            } catch (SQLException e) {
+                connection.rollback();
+                if (e.getMessage() != null && e.getMessage().contains("UNIQUE constraint failed")) {
+                    return new ActionResult(false, "そのユーザーについて有効な招待または参加申請があります");
+                }
+                throw e;
+            }
+        }
+    }
+
+    private static ActionResult requestToJoin(int groupId, int userId) throws SQLException {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                boolean groupExists;
+                try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM groups WHERE id = ?")) {
+                    statement.setInt(1, groupId);
+                    try (ResultSet result = statement.executeQuery()) { groupExists = result.next(); }
+                }
+                if (!groupExists) return rollbackResult(connection, "指定されたグループは存在しません");
+                if (isGroupMember(connection, groupId, userId)) {
+                    return rollbackResult(connection, "そのグループにはすでに所属しています");
+                }
+                if (hasPendingRequest(connection, groupId, userId)) {
+                    return rollbackResult(connection, "このグループへの有効な招待または参加申請があります");
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "INSERT INTO group_membership_requests "
+                                + "(group_id, type, requester_user_id, target_user_id) "
+                                + "VALUES (?, 'JOIN_REQUEST', ?, ?)")) {
+                    statement.setInt(1, groupId);
+                    statement.setInt(2, userId);
+                    statement.setInt(3, userId);
+                    statement.executeUpdate();
+                }
+                connection.commit();
+                return new ActionResult(true, "参加申請を送りました");
+            } catch (SQLException e) {
+                connection.rollback();
+                if (e.getMessage() != null && e.getMessage().contains("UNIQUE constraint failed")) {
+                    return new ActionResult(false, "このグループへの有効な招待または参加申請があります");
+                }
+                throw e;
+            }
+        }
+    }
+
+    private static ActionResult decideMembershipRequest(int groupId, int requestId, int leaderUserId, boolean approve)
+            throws SQLException {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                if (!isGroupLeader(connection, groupId, leaderUserId)) {
+                    return rollbackResult(connection, "対象の承認依頼がないか、操作する権限がありません");
+                }
+                Integer targetUserId = null;
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "SELECT target_user_id FROM group_membership_requests "
+                                + "WHERE id = ? AND group_id = ? AND status = 'PENDING'")) {
+                    statement.setInt(1, requestId);
+                    statement.setInt(2, groupId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (result.next()) targetUserId = result.getInt("target_user_id");
+                    }
+                }
+                if (targetUserId == null) {
+                    return rollbackResult(connection, "対象の承認依頼がないか、操作する権限がありません");
+                }
+                if (approve && !isGroupMember(connection, groupId, targetUserId)) {
+                    try (PreparedStatement statement = connection.prepareStatement(
+                            "INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'MEMBER')")) {
+                        statement.setInt(1, groupId);
+                        statement.setInt(2, targetUserId);
+                        statement.executeUpdate();
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "UPDATE group_membership_requests SET status = ?, decided_at = CURRENT_TIMESTAMP "
+                                + "WHERE id = ? AND status = 'PENDING'")) {
+                    statement.setString(1, approve ? "APPROVED" : "REJECTED");
+                    statement.setInt(2, requestId);
+                    if (statement.executeUpdate() != 1) throw new SQLException("承認状態を更新できませんでした");
+                }
+                connection.commit();
+                return new ActionResult(true, approve ? "承認してメンバーへ追加しました" : "申請を拒否しました");
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        }
+    }
+
+    private static boolean isGroupMember(Connection connection, int groupId, int userId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?")) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, userId);
+            try (ResultSet result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    private static boolean hasPendingRequest(Connection connection, int groupId, int targetUserId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM group_membership_requests "
+                        + "WHERE group_id = ? AND target_user_id = ? AND status = 'PENDING'")) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, targetUserId);
+            try (ResultSet result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    private static ActionResult rollbackResult(Connection connection, String message) throws SQLException {
+        connection.rollback();
+        return new ActionResult(false, message);
+    }
+
+    private static List<MembershipRequest> findPendingRequestsForLeader(int groupId, int leaderUserId)
+            throws SQLException {
+        List<MembershipRequest> requests = new ArrayList<>();
+        String sql = "SELECT r.id, r.group_id, g.name group_name, r.type, r.status, "
+                + "requester.username requester_name, target.username target_name "
+                + "FROM group_membership_requests r JOIN groups g ON g.id = r.group_id "
+                + "JOIN users requester ON requester.id = r.requester_user_id "
+                + "JOIN users target ON target.id = r.target_user_id "
+                + "WHERE r.group_id = ? AND g.leader_user_id = ? AND r.status = 'PENDING' ORDER BY r.id";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, groupId);
+            statement.setInt(2, leaderUserId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) requests.add(readMembershipRequest(result));
+            }
+        }
+        return requests;
+    }
+
+    private static List<MembershipRequest> findJoinRequestsForUser(int userId) throws SQLException {
+        List<MembershipRequest> requests = new ArrayList<>();
+        String sql = "SELECT r.id, r.group_id, g.name group_name, r.type, r.status, "
+                + "requester.username requester_name, target.username target_name "
+                + "FROM group_membership_requests r JOIN groups g ON g.id = r.group_id "
+                + "JOIN users requester ON requester.id = r.requester_user_id "
+                + "JOIN users target ON target.id = r.target_user_id "
+                + "WHERE r.type = 'JOIN_REQUEST' AND r.requester_user_id = ? ORDER BY r.id DESC";
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, userId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) requests.add(readMembershipRequest(result));
+            }
+        }
+        return requests;
+    }
+
+    private static MembershipRequest readMembershipRequest(ResultSet result) throws SQLException {
+        return new MembershipRequest(result.getInt("id"), result.getInt("group_id"),
+                result.getString("group_name"), result.getString("type"), result.getString("status"),
+                result.getString("requester_name"), result.getString("target_name"));
     }
 
     public static void main(String[] args) throws Exception {
@@ -354,6 +1011,204 @@ public class App {
             deleteCompletedTodos(user.id());
             redirect(exchange, formValue(body, "filter"), formValue(body, "sort"), formValue(body, "direction"),
                     formValue(body, "categoryFilter"));
+        } else if (path.equals("/groups") && method.equals("GET")) {
+            send(exchange, 200, "text/html", createGroupsPage(user, "", ""));
+        } else if (path.equals("/groups/create") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            String name = formValue(body, "name").trim();
+            String description = formValue(body, "description").trim();
+            if (name.isEmpty()) {
+                send(exchange, 400, "text/html", createGroupsPage(user, "グループ名を入力してください", ""));
+            } else if (name.length() > 100 || description.length() > 1000) {
+                send(exchange, 400, "text/html", createGroupsPage(user, "グループ名または説明文が長すぎます", ""));
+            } else {
+                createGroup(user.id(), name, description);
+                redirectTo(exchange, "/groups");
+            }
+        } else if (path.equals("/groups/join") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            ActionResult result = groupId == null
+                    ? new ActionResult(false, "グループIDを正しく入力してください")
+                    : requestToJoin(groupId, user.id());
+            send(exchange, result.success() ? 200 : 400, "text/html",
+                    createGroupsPage(user, result.success() ? "" : result.message(),
+                            result.success() ? result.message() : ""));
+        } else if (path.equals("/groups/detail") && method.equals("GET")) {
+            Integer groupId = queryId(exchange);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) {
+                send(exchange, 404, "text/plain", "グループが見つかりません");
+            } else {
+                send(exchange, 200, "text/html", createGroupDetailPage(user, group, "", ""));
+            }
+        } else if (path.equals("/group-todos/add") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formInteger(body, "groupId");
+            String title = formValue(body, "title").trim();
+            String deadline = formValue(body, "deadline").trim();
+            String category = normalizedCategory(formValue(body, "category"));
+            ActionResult result = groupId == null || title.isEmpty() || title.length() > 200
+                    || !validDeadline(deadline) || category.length() > 100
+                    ? new ActionResult(false, "タイトル・締め切り日・カテゴリを正しく入力してください")
+                    : addGroupTodo(groupId, user.id(), title, deadline, category);
+            sendGroupTodoResult(exchange, user, groupId, result);
+        } else if (path.equals("/group-todos/edit") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formInteger(body, "groupId");
+            Integer todoId = formInteger(body, "todoId");
+            String title = formValue(body, "title").trim();
+            String deadline = formValue(body, "deadline").trim();
+            String category = normalizedCategory(formValue(body, "category"));
+            ActionResult result = groupId == null || todoId == null || title.isEmpty() || title.length() > 200
+                    || !validDeadline(deadline) || category.length() > 100
+                    ? new ActionResult(false, "編集内容を正しく入力してください")
+                    : editGroupTodo(groupId, todoId, user.id(), title, deadline, category);
+            sendGroupTodoResult(exchange, user, groupId, result);
+        } else if (path.equals("/group-todos/done") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formInteger(body, "groupId");
+            Integer todoId = formInteger(body, "todoId");
+            ActionResult result = groupId == null || todoId == null
+                    ? new ActionResult(false, "グループTodoを正しく指定してください")
+                    : toggleGroupTodo(groupId, todoId, user.id());
+            sendGroupTodoResult(exchange, user, groupId, result);
+        } else if (path.equals("/group-todos/delete") && method.equals("GET")) {
+            Integer groupId = queryInteger(exchange, "groupId");
+            Integer todoId = queryInteger(exchange, "todoId");
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            Todo todo = group == null || todoId == null ? null : findTodo(findGroupTodos(groupId, user.id()), todoId);
+            if (group == null || todo == null || !"LEADER".equals(group.role())) {
+                send(exchange, 403, "text/plain", "グループTodoを削除する権限がありません");
+            } else {
+                send(exchange, 200, "text/html", createGroupTodoDeleteConfirmationPage(user, group, todo));
+            }
+        } else if (path.equals("/group-todos/delete") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formInteger(body, "groupId");
+            Integer todoId = formInteger(body, "todoId");
+            ActionResult result = groupId == null || todoId == null
+                    ? new ActionResult(false, "グループTodoを正しく指定してください")
+                    : deleteGroupTodo(groupId, todoId, user.id());
+            sendGroupTodoResult(exchange, user, groupId, result);
+        } else if (path.equals("/groups/invite") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) {
+                send(exchange, 404, "text/plain", "グループが見つかりません");
+            } else {
+                Integer targetUserId = formInteger(body, "userId");
+                ActionResult result = targetUserId == null || !formValue(body, "userId").matches("[0-9]{8}")
+                        ? new ActionResult(false, "ユーザーIDは8桁の数字で入力してください")
+                        : inviteToGroup(groupId, user.id(), targetUserId);
+                send(exchange, result.success() ? 200 : 400, "text/html",
+                        createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                                result.success() ? result.message() : ""));
+            }
+        } else if (path.equals("/groups/request/decision") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer requestId = formId(body);
+            Integer groupId = formInteger(body, "groupId");
+            String decision = formValue(body, "decision");
+            boolean approve = "approve".equals(decision);
+            ActionResult result = requestId == null || groupId == null
+                    ? new ActionResult(false, "承認依頼を正しく指定してください")
+                    : !(approve || "reject".equals(decision))
+                            ? new ActionResult(false, "承認または拒否を正しく指定してください")
+                            : decideMembershipRequest(groupId, requestId, user.id(), approve);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) {
+                send(exchange, result.success() ? 404 : 403, "text/plain", result.message());
+            } else {
+                send(exchange, result.success() ? 200 : 403, "text/html",
+                        createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                                result.success() ? result.message() : ""));
+            }
+        } else if (path.equals("/groups/update") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            String name = formValue(body, "name").trim();
+            String description = formValue(body, "description").trim();
+            ActionResult result;
+            if (groupId == null) {
+                result = new ActionResult(false, "グループを正しく指定してください");
+            } else if (name.isEmpty() || name.length() > 100 || description.length() > 1000) {
+                result = new ActionResult(false, "グループ名は1～100文字、説明文は1000文字以内で入力してください");
+            } else {
+                result = updateGroup(groupId, user.id(), name, description);
+            }
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) {
+                send(exchange, 403, "text/plain", result.message());
+            } else {
+                send(exchange, result.success() ? 200 : 403, "text/html",
+                        createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                                result.success() ? result.message() : ""));
+            }
+        } else if (path.equals("/groups/member/remove") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            Integer targetUserId = formInteger(body, "userId");
+            ActionResult result = groupId == null || targetUserId == null
+                    ? new ActionResult(false, "メンバーを正しく指定してください")
+                    : removeGroupMember(groupId, user.id(), targetUserId);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) send(exchange, 403, "text/plain", result.message());
+            else send(exchange, result.success() ? 200 : 403, "text/html",
+                    createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                            result.success() ? result.message() : ""));
+        } else if (path.equals("/groups/invite/cancel") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            Integer requestId = formInteger(body, "requestId");
+            ActionResult result = groupId == null || requestId == null
+                    ? new ActionResult(false, "招待を正しく指定してください")
+                    : cancelGroupInvite(groupId, requestId, user.id());
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) send(exchange, 403, "text/plain", result.message());
+            else send(exchange, result.success() ? 200 : 403, "text/html",
+                    createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                            result.success() ? result.message() : ""));
+        } else if (path.equals("/groups/leader/transfer") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            Integer targetUserId = formInteger(body, "userId");
+            ActionResult result = groupId == null || targetUserId == null
+                    ? new ActionResult(false, "引き継ぎ先を正しく指定してください")
+                    : transferGroupLeadership(groupId, user.id(), targetUserId);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null) send(exchange, 403, "text/plain", result.message());
+            else send(exchange, result.success() ? 200 : 403, "text/html",
+                    createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                            result.success() ? result.message() : ""));
+        } else if (path.equals("/groups/leave") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            ActionResult result = groupId == null ? new ActionResult(false, "グループを正しく指定してください")
+                    : leaveGroup(groupId, user.id());
+            if (result.success()) {
+                redirectTo(exchange, "/groups");
+            } else {
+                Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+                if (group == null) send(exchange, 403, "text/plain", result.message());
+                else send(exchange, 403, "text/html", createGroupDetailPage(user, group, result.message(), ""));
+            }
+        } else if (path.equals("/groups/delete") && method.equals("GET")) {
+            Integer groupId = queryId(exchange);
+            Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+            if (group == null || !"LEADER".equals(group.role())) {
+                send(exchange, 403, "text/plain", "グループを削除する権限がありません");
+            } else {
+                send(exchange, 200, "text/html", createGroupDeleteConfirmationPage(user, group));
+            }
+        } else if (path.equals("/groups/delete") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Integer groupId = formId(body);
+            ActionResult result = groupId == null ? new ActionResult(false, "グループを正しく指定してください")
+                    : deleteGroup(groupId, user.id());
+            if (result.success()) redirectTo(exchange, "/groups");
+            else send(exchange, 403, "text/plain", result.message());
         } else if (path.equals("/settings") && method.equals("GET")) {
             send(exchange, 200, "text/html", createSettingsPage(user, "", ""));
         } else if (path.equals("/settings/theme") && method.equals("POST")) {
@@ -393,11 +1248,21 @@ public class App {
                 send(exchange, 200, "text/html", createSettingsPage(user, "", "パスワードを変更しました"));
             }
         } else if (path.equals("/settings/delete") && method.equals("GET")) {
-            send(exchange, 200, "text/html", createDeleteConfirmationPage(user));
+            if (leadsAnyGroup(user.id())) {
+                send(exchange, 409, "text/html", createSettingsPage(user,
+                        "リーダーを引き継ぐかグループを削除するまでアカウントを削除できません", ""));
+            } else {
+                send(exchange, 200, "text/html", createDeleteConfirmationPage(user));
+            }
         } else if (path.equals("/settings/delete") && method.equals("POST")) {
-            deleteAccount(user.id());
-            endAllSessions(exchange, user.id());
-            redirectTo(exchange, "/login");
+            if (leadsAnyGroup(user.id())) {
+                send(exchange, 409, "text/html", createSettingsPage(user,
+                        "リーダーを引き継ぐかグループを削除するまでアカウントを削除できません", ""));
+            } else {
+                deleteAccount(user.id());
+                endAllSessions(exchange, user.id());
+                redirectTo(exchange, "/login");
+            }
         } else if (path.equals("/") && method.equals("GET")) {
             send(exchange, 200, "text/html", createPage(user,
                     queryValue(exchange, "filter"), queryValue(exchange, "sort"), queryValue(exchange, "direction"),
@@ -475,7 +1340,7 @@ public class App {
                         """);
         int themeMarker = html.indexOf("THEME_VALUE");
         html.replace(themeMarker, themeMarker + "THEME_VALUE".length(), getUserTheme(user.id()));
-        html.append(escapeHtml(user.username())).append("のTodo</h1><span><a class='action edit' href='/settings'>設定</a> ")
+        html.append(escapeHtml(user.username())).append("のTodo</h1><span><a class='action done' href='/groups'>グループ</a> <a class='action edit' href='/settings'>設定</a> ")
                 .append("<form method='post' action='/logout' style='display:inline'><button type='submit' class='delete'>ログアウト</button></form></span></header>")
                 .append("""
                         <section class="operation-area" aria-labelledby="add-heading"><h2 id="add-heading">Todoを追加</h2>
@@ -699,11 +1564,13 @@ public class App {
 
     private static User registerUser(String username, String password)
             throws SQLException, GeneralSecurityException {
-        String sql = "INSERT INTO users (username, password_hash) VALUES (?, ?)";
+        String sql = "INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)";
         try (Connection connection = connect();
-                PreparedStatement statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-            statement.setString(1, username);
-            statement.setString(2, hashPassword(password));
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            int userId = generateAvailableUserId(connection);
+            statement.setInt(1, userId);
+            statement.setString(2, username);
+            statement.setString(3, hashPassword(password));
             try {
                 statement.executeUpdate();
             } catch (SQLException e) {
@@ -712,10 +1579,7 @@ public class App {
                 }
                 throw e;
             }
-            try (ResultSet keys = statement.getGeneratedKeys()) {
-                keys.next();
-                return new User(keys.getInt(1), username);
-            }
+            return new User(userId, username);
         }
     }
 
@@ -832,6 +1696,8 @@ public class App {
                 + "<header><h1>アカウント設定</h1><a href='/'>Todoへ戻る</a></header>"
                 + (error.isEmpty() ? "" : "<p class='notice error'>" + escapeHtml(error) + "</p>")
                 + (message.isEmpty() ? "" : "<p class='notice success'>" + escapeHtml(message) + "</p>")
+                + "<section><h2>ユーザーID</h2><p><strong>" + String.format("%08d", user.id())
+                + "</strong></p><p>グループへ招待してもらうときに、この8桁のIDを伝えてください。</p></section>"
                 + "<section><h2>表示設定</h2><form id='theme-form' method='post' action='/settings/theme'>"
                 + "<label for='theme'>テーマ</label><select id='theme' name='theme'>"
                 + "<option value='dark'" + (theme.equals("dark") ? " selected" : "") + ">ダーク</option>"
@@ -855,6 +1721,235 @@ public class App {
                 + "<p>ユーザー情報と、このアカウントのTodoがすべて削除されます。</p>"
                 + "<a class='button danger' href='/settings/delete'>削除の確認へ</a></section>"
                 + "<script>const themeSelect=document.getElementById('theme');const themeStatus=document.getElementById('theme-status');themeSelect.addEventListener('change',async function(){const previous=document.documentElement.dataset.theme;document.documentElement.dataset.theme=this.value;themeStatus.textContent='保存中…';try{const response=await fetch('/settings/theme',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({theme:this.value})});if(!response.ok)throw new Error();themeStatus.textContent='表示設定を保存しました';}catch(error){document.documentElement.dataset.theme=previous;this.value=previous;themeStatus.textContent='保存できませんでした。もう一度お試しください';}});</script></main></body></html>";
+    }
+
+    private static String createGroupsPage(User user, String error, String message) throws SQLException {
+        StringBuilder html = new StringBuilder(settingsPageStart("グループ", getUserTheme(user.id())))
+                .append("<header><h1>グループ</h1><a href='/'>Todoへ戻る</a></header>");
+        if (!error.isEmpty()) {
+            html.append("<p class='notice error'>").append(escapeHtml(error)).append("</p>");
+        }
+        if (!message.isEmpty()) {
+            html.append("<p class='notice success'>").append(escapeHtml(message)).append("</p>");
+        }
+        html.append("<section><h2>新しいグループを作成</h2>"
+                + "<form method='post' action='/groups/create'>"
+                + "<label for='group-name'>グループ名（必須）</label>"
+                + "<input id='group-name' name='name' maxlength='100' required>"
+                + "<label for='group-description'>説明文（任意）</label>"
+                + "<textarea id='group-description' name='description' maxlength='1000' "
+                + "style='width:100%;min-height:100px;padding:9px 11px;font:inherit'></textarea>"
+                + "<button>作成</button></form></section>"
+                + "<section><h2>グループへ参加申請</h2>"
+                + "<form method='post' action='/groups/join'>"
+                + "<label for='join-group-id'>参加するグループID</label>"
+                + "<input id='join-group-id' name='id' type='number' min='1' required>"
+                + "<button>参加申請を送る</button></form></section>"
+                + "<section><h2>所属グループ</h2>");
+        List<Group> groups = findGroupsForUser(user.id());
+        if (groups.isEmpty()) {
+            html.append("<p>所属しているグループはありません。</p>");
+        } else {
+            html.append("<ul>");
+            for (Group group : groups) {
+                html.append("<li><a href='/groups/detail?id=").append(group.id()).append("'>")
+                        .append(escapeHtml(group.name())).append("</a> — ID: ").append(group.id())
+                        .append("（").append("LEADER".equals(group.role()) ? "リーダー" : "一般メンバー")
+                        .append("）</li>");
+            }
+            html.append("</ul>");
+        }
+        html.append("</section><section><h2>自分の参加申請状況</h2>");
+        List<MembershipRequest> joinRequests = findJoinRequestsForUser(user.id());
+        if (joinRequests.isEmpty()) {
+            html.append("<p>参加申請はありません。</p>");
+        } else {
+            html.append("<ul>");
+            for (MembershipRequest request : joinRequests) {
+                html.append("<li>").append(escapeHtml(request.groupName())).append("（ID: ")
+                        .append(request.groupId()).append("）— ").append(statusLabel(request.status())).append("</li>");
+            }
+            html.append("</ul>");
+        }
+        return html.append("</section></main></body></html>").toString();
+    }
+
+    private static String createGroupDetailPage(User user, Group group, String error, String message)
+            throws SQLException {
+        StringBuilder html = new StringBuilder(settingsPageStart(group.name(), getUserTheme(user.id())))
+                .append("<header><h1>").append(escapeHtml(group.name()))
+                .append("</h1><a href='/groups'>一覧へ戻る</a></header>");
+        if (!error.isEmpty()) html.append("<p class='notice error'>").append(escapeHtml(error)).append("</p>");
+        if (!message.isEmpty()) html.append("<p class='notice success'>").append(escapeHtml(message)).append("</p>");
+        html.append("<section><h2>グループ情報</h2><p><strong>グループID:</strong> ")
+                .append(group.id()).append("</p><p><strong>説明:</strong> ")
+                .append(group.description().isEmpty() ? "（説明なし）" : escapeHtml(group.description()))
+                .append("</p><p><strong>あなたの役職:</strong> ")
+                .append("LEADER".equals(group.role()) ? "リーダー" : "一般メンバー")
+                .append("</p></section>");
+        boolean leader = "LEADER".equals(group.role());
+        List<Todo> groupTodos = findGroupTodos(group.id(), user.id());
+        html.append("<section><h2>グループTodo</h2>");
+        if (leader) {
+            html.append("<form method='post' action='/group-todos/add'>")
+                    .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
+                    .append("<label>タイトル</label><input name='title' maxlength='200' required>")
+                    .append("<label>締め切り日</label><input name='deadline' type='date'>")
+                    .append("<label>カテゴリ</label><input name='category' maxlength='100' value='未分類'>")
+                    .append("<button>グループTodoを追加</button></form>");
+        }
+        if (groupTodos.isEmpty()) {
+            html.append("<p>グループTodoはありません。</p>");
+        } else {
+            html.append("<ul>");
+            for (Todo todo : groupTodos) {
+                html.append("<li><strong>").append(todo.done() ? "完了: " : "未完了: ")
+                        .append(escapeHtml(todo.title())).append("</strong><br>締め切り: ")
+                        .append(todo.deadline() == null || todo.deadline().isEmpty() ? "なし" : escapeHtml(todo.deadline()))
+                        .append(" / カテゴリ: ").append(escapeHtml(normalizedCategory(todo.category())))
+                        .append("<form method='post' action='/group-todos/done'>")
+                        .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
+                        .append("<input type='hidden' name='todoId' value='").append(todo.id()).append("'>")
+                        .append("<button>").append(todo.done() ? "未完了に戻す" : "完了にする").append("</button></form>");
+                if (leader) {
+                    html.append("<details><summary>編集</summary><form method='post' action='/group-todos/edit'>")
+                            .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
+                            .append("<input type='hidden' name='todoId' value='").append(todo.id()).append("'>")
+                            .append("<label>タイトル</label><input name='title' maxlength='200' required value='")
+                            .append(escapeHtml(todo.title())).append("'><label>締め切り日</label>")
+                            .append("<input name='deadline' type='date' value='")
+                            .append(escapeHtml(todo.deadline() == null ? "" : todo.deadline())).append("'>")
+                            .append("<label>カテゴリ</label><input name='category' maxlength='100' value='")
+                            .append(escapeHtml(normalizedCategory(todo.category())))
+                            .append("'><button>編集を保存</button></form></details>")
+                            .append("<a class='button danger' href='/group-todos/delete?groupId=")
+                            .append(group.id()).append("&todoId=").append(todo.id()).append("'>削除の確認へ</a>");
+                }
+                html.append("</li>");
+            }
+            html.append("</ul>");
+        }
+        html.append("</section>");
+        if ("LEADER".equals(group.role())) {
+            html.append("<section><h2>グループ情報を変更</h2><form method='post' action='/groups/update'>")
+                    .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
+                    .append("<label for='edit-group-name'>グループ名</label>")
+                    .append("<input id='edit-group-name' name='name' maxlength='100' required value='")
+                    .append(escapeHtml(group.name())).append("'>")
+                    .append("<label for='edit-group-description'>説明文</label>")
+                    .append("<textarea id='edit-group-description' name='description' maxlength='1000' ")
+                    .append("style='width:100%;min-height:100px;padding:9px 11px;font:inherit'>")
+                    .append(escapeHtml(group.description())).append("</textarea><button>変更を保存</button></form></section>");
+        }
+        List<GroupMember> members = findGroupMembers(group.id(), user.id());
+        html.append("<section><h2>メンバー一覧</h2><ul>");
+        for (GroupMember member : members) {
+            html.append("<li><strong>").append(escapeHtml(member.username())).append("</strong>（ID: ")
+                    .append(member.userId()).append("）— ")
+                    .append("LEADER".equals(member.role()) ? "リーダー" : "一般メンバー");
+            if ("LEADER".equals(group.role()) && "MEMBER".equals(member.role())) {
+                html.append("<form method='post' action='/groups/member/remove'>")
+                        .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
+                        .append("<input type='hidden' name='userId' value='").append(member.userId()).append("'>")
+                        .append("<button class='danger'>メンバーから削除</button></form>");
+            }
+            html.append("</li>");
+        }
+        html.append("</ul></section><section><h2>ユーザーを招待</h2>")
+                .append("<p>").append("LEADER".equals(group.role())
+                        ? "リーダーからの招待は、すぐにメンバーへ追加されます。"
+                        : "一般メンバーからの招待は、リーダーの承認後に追加されます。")
+                .append("</p><form method='post' action='/groups/invite'>")
+                .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
+                .append("<label for='invite-user-id'>招待するユーザーID（8桁）</label>")
+                .append("<input id='invite-user-id' name='userId' inputmode='numeric' pattern='[0-9]{8}' maxlength='8' required>")
+                .append("<button>招待する</button></form></section>");
+        if ("LEADER".equals(group.role())) {
+            html.append("<section><h2>承認・拒否する依頼</h2>");
+            List<MembershipRequest> requests = findPendingRequestsForLeader(group.id(), user.id());
+            if (requests.isEmpty()) {
+                html.append("<p>保留中の依頼はありません。</p>");
+            } else {
+                html.append("<ul>");
+                for (MembershipRequest request : requests) {
+                    html.append("<li><strong>")
+                            .append("MEMBER_INVITE".equals(request.type()) ? "一般メンバーによる招待" : "ユーザー本人の参加申請")
+                            .append("</strong><br>");
+                    if ("MEMBER_INVITE".equals(request.type())) {
+                        html.append("招待者: ").append(escapeHtml(request.requesterName())).append(" / ");
+                    }
+                    html.append("参加対象: ").append(escapeHtml(request.targetName()))
+                            .append("<form method='post' action='/groups/request/decision'>")
+                            .append("<input type='hidden' name='id' value='").append(request.id()).append("'>")
+                            .append("<input type='hidden' name='groupId' value='").append(group.id()).append("'>")
+                            .append("<button name='decision' value='approve'>承認</button> ")
+                            .append("<button class='danger' name='decision' value='reject'>拒否</button></form>");
+                    if ("MEMBER_INVITE".equals(request.type())) {
+                        html.append("<form method='post' action='/groups/invite/cancel'>")
+                                .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
+                                .append("<input type='hidden' name='requestId' value='").append(request.id()).append("'>")
+                                .append("<button class='danger'>招待を取り消す</button></form>");
+                    }
+                    html.append("</li>");
+                }
+                html.append("</ul>");
+            }
+            html.append("</section>");
+            html.append("<section><h2>リーダーを変更</h2><p>引き継ぎ後、あなたは一般メンバーになります。</p>")
+                    .append("<form method='post' action='/groups/leader/transfer'>")
+                    .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
+                    .append("<label for='new-leader'>引き継ぎ先</label><select id='new-leader' name='userId' required>")
+                    .append("<option value=''>一般メンバーを選択</option>");
+            for (GroupMember member : members) {
+                if ("MEMBER".equals(member.role())) {
+                    html.append("<option value='").append(member.userId()).append("'>")
+                            .append(escapeHtml(member.username())).append("（ID: ").append(member.userId())
+                            .append("）</option>");
+                }
+            }
+            html.append("</select><button>リーダー権限を引き継ぐ</button></form></section>")
+                    .append("<section class='danger-zone'><h2>グループを削除</h2>")
+                    .append("<p>メンバー・招待・参加申請もすべて削除されます。</p>")
+                    .append("<a class='button danger' href='/groups/delete?id=").append(group.id())
+                    .append("'>削除の確認へ</a></section>");
+        } else {
+            html.append("<section class='danger-zone'><h2>グループから脱退</h2>")
+                    .append("<form method='post' action='/groups/leave'>")
+                    .append("<input type='hidden' name='id' value='").append(group.id()).append("'>")
+                    .append("<button class='danger'>脱退する</button></form></section>");
+        }
+        return html.append("</main></body></html>").toString();
+    }
+
+    private static String createGroupDeleteConfirmationPage(User user, Group group) throws SQLException {
+        return settingsPageStart("グループ削除の確認", getUserTheme(user.id()))
+                + "<section class='danger-zone'><h1>グループを削除しますか？</h1>"
+                + "<p><strong>" + escapeHtml(group.name())
+                + "</strong> と、関連するメンバー・招待・参加申請情報は元に戻せません。</p>"
+                + "<div class='confirmation-actions'><a class='button secondary' href='/groups/detail?id="
+                + group.id() + "'>キャンセル</a><form method='post' action='/groups/delete'>"
+                + "<input type='hidden' name='id' value='" + group.id() + "'>"
+                + "<button class='danger'>グループを削除する</button></form></div></section></main></body></html>";
+    }
+
+    private static String createGroupTodoDeleteConfirmationPage(User user, Group group, Todo todo)
+            throws SQLException {
+        return settingsPageStart("グループTodo削除の確認", getUserTheme(user.id()))
+                + "<section class='danger-zone'><h1>グループTodoを削除しますか？</h1><p><strong>"
+                + escapeHtml(todo.title()) + "</strong> は元に戻せません。</p>"
+                + "<div class='confirmation-actions'><a class='button secondary' href='/groups/detail?id="
+                + group.id() + "'>キャンセル</a><form method='post' action='/group-todos/delete'>"
+                + "<input type='hidden' name='groupId' value='" + group.id() + "'>"
+                + "<input type='hidden' name='todoId' value='" + todo.id() + "'>"
+                + "<button class='danger'>グループTodoを削除する</button></form></div></section></main></body></html>";
+    }
+
+    private static String statusLabel(String status) {
+        return switch (status) {
+            case "APPROVED" -> "承認済み";
+            case "REJECTED" -> "拒否";
+            default -> "承認待ち";
+        };
     }
 
     private static String passwordInput(String name, String autocomplete) {
@@ -912,9 +2007,22 @@ public class App {
         return null;
     }
 
-    private static Integer formId(String body) {
+    private static Integer queryInteger(HttpExchange exchange, String name) {
         try {
-            return Integer.parseInt(formValue(body, "id"));
+            String value = queryValue(exchange, name);
+            return value == null ? null : Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer formId(String body) {
+        return formInteger(body, "id");
+    }
+
+    private static Integer formInteger(String body, String name) {
+        try {
+            return Integer.parseInt(formValue(body, name));
         } catch (NumberFormatException ignored) {
             return null;
         }
@@ -940,6 +2048,33 @@ public class App {
 
     private static String normalizedCategory(String category) {
         return category == null || category.trim().isEmpty() ? "未分類" : category.trim();
+    }
+
+    private static boolean validDeadline(String deadline) {
+        if (deadline == null || deadline.isEmpty()) return true;
+        try {
+            LocalDate.parse(deadline);
+            return true;
+        } catch (DateTimeParseException ignored) {
+            return false;
+        }
+    }
+
+    private static Todo findTodo(List<Todo> todos, int id) {
+        for (Todo todo : todos) if (todo.id() == id) return todo;
+        return null;
+    }
+
+    private static void sendGroupTodoResult(HttpExchange exchange, User user, Integer groupId,
+            ActionResult result) throws IOException, SQLException {
+        Group group = groupId == null ? null : findGroupForMember(groupId, user.id());
+        if (group == null) {
+            send(exchange, 403, "text/plain", "このグループへアクセスできません");
+            return;
+        }
+        send(exchange, result.success() ? 200 : 403, "text/html",
+                createGroupDetailPage(user, group, result.success() ? "" : result.message(),
+                        result.success() ? result.message() : ""));
     }
 
     private static String encodeUrl(String value) {
