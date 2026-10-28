@@ -103,6 +103,14 @@ public class App {
         }
     }
 
+    private static void deleteCompletedTodos() throws SQLException {
+        String sql = "DELETE FROM todos WHERE done = 1";
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.executeUpdate();
+        }
+    }
+
     private static List<Todo> findAllTodos() throws SQLException { // ★ CSV読込をSELECTへ変更
         List<Todo> todos = new ArrayList<>(); // ★ SELECT結果の格納先
         String sql = "SELECT id, title, done, deadline, category FROM todos ORDER BY id"; // ★ 一覧取得SQL
@@ -188,6 +196,11 @@ public class App {
             }
             redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"),
                     queryValue(exchange, "category"));
+        } else if (path.equals("/delete-completed") && method.equals("POST")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            deleteCompletedTodos();
+            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"),
+                    formValue(body, "categoryFilter"));
         } else if (path.equals("/") && method.equals("GET")) {
             send(exchange, 200, "text/html", createPage(
                     queryValue(exchange, "filter"), queryValue(exchange, "sort"),
@@ -275,12 +288,21 @@ public class App {
                         .append(category.equals(selectedCategory) ? " selected" : "").append(">")
                         .append(escapeHtml(category)).append("</option>"));
         html.append("</select></label></form>");
+        long completedCount = todos.stream().filter(Todo::done).count();
+        html.append("<form method='post' action='/delete-completed'")
+                .append(completedCount > 0
+                        ? " onsubmit=\"return confirm('完了済みのTodoをすべて削除しますか？')\""
+                        : "")
+                .append("><input type='hidden' name='filter' value='").append(filter)
+                .append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><input type='hidden' name='categoryFilter' value='")
+                .append(escapeHtml(categoryFilter))
+                .append("'><button class='delete' type='submit'>完了済みを一括削除</button></form>");
         if (displayTodos.isEmpty()) {
             html.append(keyword.isEmpty()
                     ? "<p>やることは、いまゼロです</p>"
                     : "<p>検索結果は0件です。</p>");
         } else {
-            long completedCount = todos.stream().filter(Todo::done).count();
             html.append("<p>").append(todos.size()).append("件中")
                     .append(completedCount).append("件 完了</p>");
             html.append("<ul>");
