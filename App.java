@@ -286,43 +286,43 @@ public class App {
                         <html lang="ja">
                         <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>わたしのTodo</title>
                         <style>
-                        *{box-sizing:border-box}body{max-width:640px;margin:40px auto;padding:0 16px;background:#f6f8fa;color:#24292f;font-family:system-ui,sans-serif;font-size:16px}h1{font-size:24px}.operation-area{margin:0 0 16px;padding:16px;border:1px solid #d0d7de;border-radius:10px;background:#fff}.operation-area h2{margin:0 0 12px;font-size:18px}.operation-area form{display:flex;gap:8px}.filter-controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.filter-controls form{margin:0}.filter-controls label{display:flex;align-items:center;gap:6px;white-space:nowrap}input,select{min-width:0;flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f}input::placeholder{color:#8c959f;opacity:1}button,.action{display:inline-block;padding:9px 14px;border:0;border-radius:6px;color:#fff;font-size:16px;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}.filter-link{display:inline-block;padding:6px 10px;border-radius:6px}.filter-link.selected{background:#0969da;color:#fff;font-weight:600;text-decoration:none}ul{margin:16px 0 0;padding:0;list-style:none}li{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}li.overdue{border-color:#cf222e;background:#ffebe9;color:#cf222e}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#8c959f;text-decoration:line-through}.actions{display:flex;gap:8px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}#theme-toggle{margin-bottom:16px;background:#57606a}[data-theme="dark"]{color-scheme:dark}[data-theme="dark"] body{background:#0d1117;color:#e6edf3}[data-theme="dark"] input,[data-theme="dark"] select{border-color:#6e7681;background:#161b22;color:#e6edf3}[data-theme="dark"] .operation-area,[data-theme="dark"] li{border-color:#30363d;background:#161b22}[data-theme="dark"] li.overdue{border-color:#f85149;background:#3d1515;color:#ff7b72}[data-theme="dark"] button{background:#238636}[data-theme="dark"] #theme-toggle{background:#6e7681}[data-theme="dark"] .filter-link.selected{background:#1f6feb}[data-theme="dark"] .done{background:#1f6feb}[data-theme="dark"] .edit{background:#8957e5}[data-theme="dark"] .delete{background:#da3633}[data-theme="dark"] .todo-title.completed{color:#8b949e}@media(max-width:480px){body{margin:24px auto}.operation-area form{align-items:stretch;flex-direction:column}.filter-controls{align-items:stretch;flex-direction:column}.filter-controls form{width:100%}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}
+                        *{box-sizing:border-box}html{background:#f6f8fa}body{width:100%;max-width:800px;margin:24px auto;padding:0 20px 32px;color:#24292f;font-family:system-ui,sans-serif;font-size:16px;line-height:1.5}.page-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}h1{margin:0;font-size:26px;line-height:1.25}.operation-area{margin:0 0 12px;padding:16px;border:1px solid #d0d7de;border-radius:10px;background:#fff}.operation-area h2{margin:0 0 10px;font-size:17px}.operation-area form{display:flex;gap:8px}.add-form .todo-input{flex:3}.add-form .deadline-input{flex:0 1 170px}.add-form .category-input{flex:1.6}.search-form input[name="q"]{flex:1}.filter-nav{display:flex;flex-wrap:wrap;gap:6px}.filter-link{display:inline-block;padding:6px 11px;border:1px solid transparent;border-radius:6px;color:#0969da;text-decoration:none}.filter-link:hover{background:#f3f4f6}.filter-link.selected{border-color:#0969da;background:#0969da;color:#fff;font-weight:600}.filter-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-top:12px;padding-top:12px;border-top:1px solid #d8dee4}.filter-controls form{margin:0}.filter-controls label{display:flex;align-items:center;gap:7px;white-space:nowrap}.filter-controls select{min-width:140px}input,select{min-width:0;height:42px;padding:9px 11px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f;font:inherit}input::placeholder{color:#6e7781;opacity:1}button,.action{display:inline-flex;min-height:42px;align-items:center;justify-content:center;padding:9px 14px;border:0;border-radius:6px;color:#fff;font:inherit;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}.list-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0 10px}.todo-count{margin:0;font-weight:600}.bulk-form{flex:none}.bulk-delete{min-height:36px;padding:7px 11px;border:1px solid #cf222e;background:transparent;color:#cf222e;font-size:14px}.bulk-delete:hover{background:#ffebe9}ul{margin:0;padding:0;list-style:none}li{display:flex;align-items:center;gap:12px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}li.overdue{border-color:#cf222e;background:#ffebe9;color:#cf222e}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#6e7781;text-decoration:line-through}.edit-form{display:flex;gap:8px}.actions{display:flex;flex:none;gap:6px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}.empty-state{margin:0;padding:24px;text-align:center;color:#57606a;border:1px dashed #afb8c1;border-radius:8px;background:#fff}#theme-toggle{min-height:34px;padding:6px 10px;border:1px solid #afb8c1;background:#f3f4f6;color:#57606a;font-size:13px;font-weight:500}[data-theme="dark"]{color-scheme:dark;background:#0d1117}[data-theme="dark"] body{color:#e6edf3}[data-theme="dark"] input,[data-theme="dark"] select{border-color:#6e7681;background:#0d1117;color:#e6edf3}[data-theme="dark"] .operation-area,[data-theme="dark"] li,[data-theme="dark"] .empty-state{border-color:#30363d;background:#161b22}[data-theme="dark"] .filter-controls{border-color:#30363d}[data-theme="dark"] .filter-link{color:#58a6ff}[data-theme="dark"] .filter-link:hover{background:#21262d}[data-theme="dark"] .filter-link.selected{border-color:#1f6feb;background:#1f6feb;color:#fff}[data-theme="dark"] li.overdue{border-color:#f85149;background:#3d1515;color:#ff7b72}[data-theme="dark"] button{background:#238636}[data-theme="dark"] #theme-toggle{border-color:#30363d;background:#21262d;color:#8b949e}[data-theme="dark"] .bulk-delete{border-color:#f85149;background:transparent;color:#ff7b72}[data-theme="dark"] .bulk-delete:hover{background:#3d1515}[data-theme="dark"] .done{background:#1f6feb}[data-theme="dark"] .edit{background:#8957e5}[data-theme="dark"] .delete{background:#da3633}[data-theme="dark"] .todo-title.completed,[data-theme="dark"] .empty-state{color:#8b949e}@media(max-width:640px){body{margin:16px auto;padding:0 12px 24px}.page-header{margin-bottom:12px}h1{font-size:23px}.operation-area{padding:14px}.operation-area form.add-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.75fr)}.add-form .todo-input{grid-column:1/-1}.add-form .category-input{min-width:0}.add-form button{grid-column:1/-1}.filter-controls{align-items:stretch;flex-direction:column}.filter-controls form,.filter-controls label,.filter-controls select{width:100%}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}@media(max-width:420px){.operation-area form.add-form,.search-form{display:flex;align-items:stretch;flex-direction:column}.add-form .deadline-input{flex:auto}.list-header{align-items:flex-start;flex-direction:column;gap:8px}.bulk-form,.bulk-delete{width:100%}.edit-form{align-items:stretch;flex-direction:column}}
                         </style>
                         <script>if(localStorage.getItem('theme')==='dark'){document.documentElement.dataset.theme='dark'}</script>
-                        </head><body><h1>わたしのTodo</h1>
-                        <button id="theme-toggle" type="button">ライト／ダーク</button>
+                        </head><body><header class="page-header"><h1>わたしのTodo</h1>
+                        <button id="theme-toggle" type="button" aria-pressed="false">ライト／ダーク</button></header>
                         <section class="operation-area" aria-labelledby="add-heading"><h2 id="add-heading">Todoを追加</h2>
-                        <form method="post" action="/add"><input name="todo" placeholder="やることを入力"><input type="date" name="deadline"><input name="category" placeholder="カテゴリ（未入力は未分類）"><button>追加</button>
+                        <form class="add-form" method="post" action="/add"><input class="todo-input" name="todo" placeholder="やることを入力"><input class="deadline-input" type="date" name="deadline"><input class="category-input" name="category" placeholder="カテゴリ（未入力は未分類）"><button>追加</button>
                         """);
         html.append("<input type='hidden' name='filter' value='").append(filter).append("'>")
                 .append("<input type='hidden' name='sort' value='").append(sort).append("'>")
                 .append("<input type='hidden' name='categoryFilter' value='")
                 .append(escapeHtml(categoryFilter)).append("'></form></section>")
-                .append("<section class='operation-area' aria-labelledby='search-heading'><h2 id='search-heading'>Todoを検索</h2><form method='get' action='/search'>")
+                .append("<section class='operation-area' aria-labelledby='search-heading'><h2 id='search-heading'>Todoを検索</h2><form class='search-form' method='get' action='/search'>")
                 .append("<input name='q' placeholder='キーワードで検索' value='")
                 .append(escapeHtml(keyword)).append("'><input type='hidden' name='filter' value='")
                 .append(filter).append("'><input type='hidden' name='sort' value='").append(sort)
                 .append("'><input type='hidden' name='category' value='").append(escapeHtml(categoryFilter))
                 .append("'><button>検索</button></form></section>")
-                .append("<section class='operation-area' aria-labelledby='filter-heading'><h2 id='filter-heading'>表示を絞り込み</h2><nav><a class='filter-link").append(filter.equals("all") ? " selected' aria-current='page" : "")
+                .append("<section class='operation-area' aria-labelledby='filter-heading'><h2 id='filter-heading'>表示を絞り込み</h2><nav class='filter-nav'><a class='filter-link").append(filter.equals("all") ? " selected' aria-current='page" : "")
                 .append("' href='/?filter=all&sort=").append(sort).append("&category=")
-                .append(encodeUrl(categoryFilter)).append("'>全部</a> | ")
+                .append(encodeUrl(categoryFilter)).append("'>全部</a>")
                 .append("<a class='filter-link").append(filter.equals("active") ? " selected' aria-current='page" : "")
                 .append("' href='/?filter=active&sort=").append(sort).append("&category=")
-                .append(encodeUrl(categoryFilter)).append("'>未完了だけ</a> | ")
+                .append(encodeUrl(categoryFilter)).append("'>未完了だけ</a>")
                 .append("<a class='filter-link").append(filter.equals("done") ? " selected' aria-current='page" : "")
                 .append("' href='/?filter=done&sort=").append(sort).append("&category=")
                 .append(encodeUrl(categoryFilter)).append("'>完了だけ</a></nav><div class='filter-controls'>")
                 .append("<form method='get' action='/'><input type='hidden' name='filter' value='")
                 .append(filter).append("'><input type='hidden' name='category' value='")
-                .append(escapeHtml(categoryFilter)).append("'><label>並び順 <select name='sort' onchange='this.form.submit()'>")
+                .append(escapeHtml(categoryFilter)).append("'><label>並び順 <select name='sort' onchange='saveScroll();this.form.submit()'>")
                 .append("<option value='new'").append(sort.equals("new") ? " selected" : "")
                 .append(">新しい順</option><option value='name'")
                 .append(sort.equals("name") ? " selected" : "")
                 .append(">名前順</option></select></label></form>")
                 .append("<form method='get' action='/'><input type='hidden' name='filter' value='")
                 .append(filter).append("'><input type='hidden' name='sort' value='").append(sort)
-                .append("'><label>カテゴリ <select name='category' onchange='this.form.submit()'>")
+                .append("'><label>カテゴリ <select name='category' onchange='saveScroll();this.form.submit()'>")
                 .append("<option value=''>すべて</option>");
         String selectedCategory = categoryFilter;
         todos.stream().map(todo -> normalizedCategory(todo.category())).distinct()
@@ -332,7 +332,9 @@ public class App {
                         .append(escapeHtml(category)).append("</option>"));
         html.append("</select></label></form></div></section>");
         long completedCount = todos.stream().filter(Todo::done).count();
-        html.append("<form method='post' action='/delete-completed'")
+        html.append("<div class='list-header'><p class='todo-count'>")
+                .append(displayTodos.size()).append("件を表示（全").append(todos.size()).append("件・完了")
+                .append(completedCount).append("件）</p><form class='bulk-form' method='post' action='/delete-completed'")
                 .append(completedCount > 0
                         ? " onsubmit=\"return confirm('完了済みのTodoをすべて削除しますか？')\""
                         : "")
@@ -340,14 +342,12 @@ public class App {
                 .append("'><input type='hidden' name='sort' value='").append(sort)
                 .append("'><input type='hidden' name='categoryFilter' value='")
                 .append(escapeHtml(categoryFilter))
-                .append("'><button class='delete' type='submit'>完了済みを一括削除</button></form>");
+                .append("'><button class='bulk-delete' type='submit'>完了済みを一括削除</button></form></div>");
         if (displayTodos.isEmpty()) {
             html.append(keyword.isEmpty()
-                    ? "<p>やることは、いまゼロです</p>"
-                    : "<p>検索結果は0件です。</p>");
+                    ? "<p class='empty-state'>やることは、いまゼロです</p>"
+                    : "<p class='empty-state'>検索結果は0件です。</p>");
         } else {
-            html.append("<p>").append(todos.size()).append("件中")
-                    .append(completedCount).append("件 完了</p>");
             html.append("<ul>");
             for (Todo todo : displayTodos) {
                 html.append("<li").append(isOverdue(todo) ? " class='overdue'" : "").append(">");
@@ -383,7 +383,7 @@ public class App {
             }
             html.append("</ul>");
         }
-        return html.append("<script>document.getElementById('theme-toggle').addEventListener('click',function(){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('theme',dark?'dark':'light');this.setAttribute('aria-pressed',dark);});</script></body></html>").toString();
+        return html.append("<script>const scrollKey='todoScrollY';const savedScrollY=sessionStorage.getItem(scrollKey);if(savedScrollY!==null){sessionStorage.removeItem(scrollKey);window.addEventListener('load',function(){requestAnimationFrame(function(){window.scrollTo(0,Number(savedScrollY));});});}function saveScroll(){sessionStorage.setItem(scrollKey,String(window.scrollY));}document.querySelectorAll('.add-form,.edit-form,.bulk-form,.search-form,.filter-controls form').forEach(function(form){form.addEventListener('submit',function(event){if(!event.defaultPrevented){saveScroll();}});});document.querySelectorAll('a.edit,a.done,a.delete,a.filter-link').forEach(function(link){link.addEventListener('click',function(event){if(!event.defaultPrevented&&event.button===0&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!event.altKey){saveScroll();}});});const themeToggle=document.getElementById('theme-toggle');themeToggle.setAttribute('aria-pressed',document.documentElement.dataset.theme==='dark');themeToggle.addEventListener('click',function(){const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('theme',dark?'dark':'light');this.setAttribute('aria-pressed',dark);});</script></body></html>").toString();
     }
 
     private static boolean isOverdue(Todo todo) {
