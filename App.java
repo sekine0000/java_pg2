@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection; // ★ SQLite接続用に変更
 import java.sql.DriverManager; // ★ SQLite接続用に変更
@@ -19,7 +20,7 @@ import java.util.Locale;
 public class App {
     private static final String DB_URL = "jdbc:sqlite:todos.db"; // ★ CSVではなくSQLiteへ接続
 
-    private record Todo(int id, String title, boolean done, String deadline) {
+    private record Todo(int id, String title, boolean done, String deadline, String category) {
     } // ★ DBの1行を表す
 
     private static Connection connect() throws SQLException { // ★ DB接続処理へ変更
@@ -31,7 +32,8 @@ public class App {
                 + "id INTEGER PRIMARY KEY, " // ★ id列を定義
                 + "title TEXT, " // ★ title列を定義
                 + "done INTEGER, " // ★ done列を定義
-                + "deadline TEXT)"; // ★ 締め切り日列を定義
+                + "deadline TEXT, " // ★ 締め切り日列を定義
+                + "category TEXT DEFAULT '未分類')"; // カテゴリ列を定義
         try (Connection connection = connect(); // ★ DB接続を自動で閉じる
                 Statement statement = connection.createStatement()) { // ★ DDL実行用Statement
             statement.execute(sql); // ★ todos表がなければ作成
@@ -46,16 +48,28 @@ public class App {
             if (!hasDeadline) {
                 statement.execute("ALTER TABLE todos ADD COLUMN deadline TEXT");
             }
+            boolean hasCategory = false;
+            try (ResultSet columns = statement.executeQuery("PRAGMA table_info(todos)")) {
+                while (columns.next()) {
+                    if ("category".equals(columns.getString("name"))) {
+                        hasCategory = true;
+                    }
+                }
+            }
+            if (!hasCategory) {
+                statement.execute("ALTER TABLE todos ADD COLUMN category TEXT DEFAULT '未分類'");
+            }
         }
     }
 
-    private static void addTodo(String title, String deadline) throws SQLException { // ★ CSV保存をINSERTへ変更
-        String sql = "INSERT INTO todos (title, done, deadline) VALUES (?, ?, ?)"; // ★ 追加SQL
+    private static void addTodo(String title, String deadline, String category) throws SQLException { // ★ CSV保存をINSERTへ変更
+        String sql = "INSERT INTO todos (title, done, deadline, category) VALUES (?, ?, ?, ?)"; // ★ 追加SQL
         try (Connection connection = connect(); // ★ DBへ接続
                 PreparedStatement statement = connection.prepareStatement(sql)) { // ★ PreparedStatementを使用
             statement.setString(1, title); // ★ タイトルを設定
             statement.setInt(2, 0); // ★ 未完了を0で保存
             statement.setString(3, deadline); // ★ 締め切り日を設定
+            statement.setString(4, category); // カテゴリを設定
             statement.executeUpdate(); // ★ INSERTを実行
         }
     }
@@ -91,7 +105,7 @@ public class App {
 
     private static List<Todo> findAllTodos() throws SQLException { // ★ CSV読込をSELECTへ変更
         List<Todo> todos = new ArrayList<>(); // ★ SELECT結果の格納先
-        String sql = "SELECT id, title, done, deadline FROM todos ORDER BY id"; // ★ 一覧取得SQL
+        String sql = "SELECT id, title, done, deadline, category FROM todos ORDER BY id"; // ★ 一覧取得SQL
         try (Connection connection = connect(); // ★ DBへ接続
                 PreparedStatement statement = connection.prepareStatement(sql); // ★ PreparedStatementを使用
                 ResultSet resultSet = statement.executeQuery()) { // ★ SELECTを実行
@@ -100,7 +114,8 @@ public class App {
                         resultSet.getInt("id"), // ★ idを読み出す
                         resultSet.getString("title"), // ★ titleを読み出す
                         resultSet.getInt("done") != 0, // ★ doneをbooleanへ変換
-                        resultSet.getString("deadline"))); // ★ 締め切り日を読み出す
+                        resultSet.getString("deadline"), // ★ 締め切り日を読み出す
+                        resultSet.getString("category"))); // カテゴリを読み出す
             }
         }
         return todos; // ★ DBから取得した一覧を返す
@@ -144,10 +159,12 @@ public class App {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             String title = formValue(body, "todo").trim();
             String deadline = formValue(body, "deadline").trim();
+            String category = normalizedCategory(formValue(body, "category"));
             if (!title.isEmpty()) {
-                addTodo(title, deadline); // ★ INSERTで追加
+                addTodo(title, deadline, category); // ★ INSERTで追加
             }
-            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"));
+            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"),
+                    formValue(body, "categoryFilter"));
         } else if (path.equals("/edit") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             Integer id = formId(body);
@@ -155,36 +172,42 @@ public class App {
             if (id != null && !title.isEmpty()) {
                 editTodo(id, title);
             }
-            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"));
+            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"),
+                    formValue(body, "categoryFilter"));
         } else if (path.equals("/done") && method.equals("GET")) {
             Integer id = queryId(exchange);
             if (id != null) {
                 completeTodo(id); // ★ UPDATEで完了
             }
-            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"));
+            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"),
+                    queryValue(exchange, "category"));
         } else if (path.equals("/delete") && method.equals("GET")) {
             Integer id = queryId(exchange);
             if (id != null) {
                 deleteTodo(id); // ★ DELETEで削除
             }
-            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"));
+            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"),
+                    queryValue(exchange, "category"));
         } else if (path.equals("/") && method.equals("GET")) {
             send(exchange, 200, "text/html", createPage(
                     queryValue(exchange, "filter"), queryValue(exchange, "sort"),
-                    queryId(exchange), null)); // ★ filterとsortに合う一覧を表示
+                    queryValue(exchange, "category"), queryId(exchange),
+                    queryValue(exchange, "q"))); // ★ 各条件に合う一覧を表示
         } else if (path.equals("/search") && method.equals("GET")) {
-            send(exchange, 200, "text/html", createPage(null, null, null,
+            send(exchange, 200, "text/html", createPage(queryValue(exchange, "filter"),
+                    queryValue(exchange, "sort"), queryValue(exchange, "category"), null,
                     queryValue(exchange, "q")));
         } else {
             send(exchange, 404, "text/plain", "ページが見つかりません");
         }
     }
 
-    private static String createPage(String filter, String sort, Integer editId, String keyword) throws SQLException { // ★
+    private static String createPage(String filter, String sort, String categoryFilter, Integer editId, String keyword) throws SQLException { // ★
                                                                                                        // filterとsortを受け取る
         List<Todo> todos = findAllTodos(); // ★ SELECTで一覧を読み出す
         List<Todo> displayTodos = new ArrayList<>(); // ★ 元データとは別に表示用一覧を作る
         keyword = keyword == null ? "" : keyword;
+        categoryFilter = categoryFilter == null ? "" : categoryFilter;
         if (!"active".equals(filter) && !"done".equals(filter)) {
             filter = "all"; // ★ 指定なし・不明な値は全部として扱う
         }
@@ -193,7 +216,8 @@ public class App {
         }
         for (Todo todo : todos) {
             if ((filter.equals("all") || filter.equals("active") && !todo.done()
-                    || filter.equals("done") && todo.done()) && todo.title().contains(keyword)) {
+                    || filter.equals("done") && todo.done()) && todo.title().contains(keyword)
+                    && (categoryFilter.isEmpty() || normalizedCategory(todo.category()).equals(categoryFilter))) {
                 displayTodos.add(todo); // ★ 条件に一致するTodoだけを表示用一覧へ追加
             }
         }
@@ -215,22 +239,42 @@ public class App {
                         *{box-sizing:border-box}body{max-width:640px;margin:40px auto;padding:0 16px;background:#f6f8fa;color:#24292f;font-family:system-ui,sans-serif;font-size:16px}h1{font-size:24px}form{display:flex;gap:8px}input{min-width:0;flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:6px}button,.action{display:inline-block;padding:9px 14px;border:0;border-radius:6px;color:#fff;font-size:16px;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}ul{margin:16px 0 0;padding:0;list-style:none}li{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.actions{display:flex;gap:8px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}@media(max-width:480px){body{margin:24px auto}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}
                         </style>
                         </head><body><h1>わたしのTodo</h1>
-                        <form method="post" action="/add"><input name="todo"><input type="date" name="deadline"><button>追加</button>
+                        <form method="post" action="/add"><input name="todo"><input type="date" name="deadline"><input name="category" placeholder="カテゴリ（未入力は未分類）"><button>追加</button>
                         """);
         html.append("<input type='hidden' name='filter' value='").append(filter).append("'>")
-                .append("<input type='hidden' name='sort' value='").append(sort).append("'></form>")
+                .append("<input type='hidden' name='sort' value='").append(sort).append("'>")
+                .append("<input type='hidden' name='categoryFilter' value='")
+                .append(escapeHtml(categoryFilter)).append("'></form>")
                 .append("<form method='get' action='/search'>")
                 .append("<input name='q' placeholder='キーワードで検索' value='")
-                .append(escapeHtml(keyword)).append("'><button>検索</button></form>")
-                .append("<nav><a href='/?filter=all&sort=").append(sort).append("'>全部</a> | ")
-                .append("<a href='/?filter=active&sort=").append(sort).append("'>未完了だけ</a> | ")
-                .append("<a href='/?filter=done&sort=").append(sort).append("'>完了だけ</a></nav>")
+                .append(escapeHtml(keyword)).append("'><input type='hidden' name='filter' value='")
+                .append(filter).append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><input type='hidden' name='category' value='").append(escapeHtml(categoryFilter))
+                .append("'><button>検索</button></form>")
+                .append("<nav><a href='/?filter=all&sort=").append(sort).append("&category=")
+                .append(encodeUrl(categoryFilter)).append("'>全部</a> | ")
+                .append("<a href='/?filter=active&sort=").append(sort).append("&category=")
+                .append(encodeUrl(categoryFilter)).append("'>未完了だけ</a> | ")
+                .append("<a href='/?filter=done&sort=").append(sort).append("&category=")
+                .append(encodeUrl(categoryFilter)).append("'>完了だけ</a></nav>")
                 .append("<form method='get' action='/'><input type='hidden' name='filter' value='")
-                .append(filter).append("'><label>並び順 <select name='sort' onchange='this.form.submit()'>")
+                .append(filter).append("'><input type='hidden' name='category' value='")
+                .append(escapeHtml(categoryFilter)).append("'><label>並び順 <select name='sort' onchange='this.form.submit()'>")
                 .append("<option value='new'").append(sort.equals("new") ? " selected" : "")
                 .append(">新しい順</option><option value='name'")
                 .append(sort.equals("name") ? " selected" : "")
-                .append(">名前順</option></select></label></form>");
+                .append(">名前順</option></select></label></form>")
+                .append("<form method='get' action='/'><input type='hidden' name='filter' value='")
+                .append(filter).append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><label>カテゴリ <select name='category' onchange='this.form.submit()'>")
+                .append("<option value=''>すべて</option>");
+        String selectedCategory = categoryFilter;
+        todos.stream().map(todo -> normalizedCategory(todo.category())).distinct()
+                .sorted(Collator.getInstance(Locale.JAPANESE))
+                .forEach(category -> html.append("<option value='").append(escapeHtml(category)).append("'")
+                        .append(category.equals(selectedCategory) ? " selected" : "").append(">")
+                        .append(escapeHtml(category)).append("</option>"));
+        html.append("</select></label></form>");
         if (displayTodos.isEmpty()) {
             html.append(keyword.isEmpty()
                     ? "<p>やることは、いまゼロです</p>"
@@ -248,10 +292,14 @@ public class App {
                             .append("' required><input type='hidden' name='id' value='").append(todo.id())
                             .append("'><input type='hidden' name='filter' value='").append(filter)
                             .append("'><input type='hidden' name='sort' value='").append(sort)
+                            .append("'><input type='hidden' name='categoryFilter' value='")
+                            .append(escapeHtml(categoryFilter))
                             .append("'><button>保存</button></form>");
                 } else {
                     html.append("<span class='todo-title'>").append(escapeHtml(todo.title()))
-                            .append(todo.done() ? " ✓" : "").append("<br>締め切り日: ")
+                            .append(todo.done() ? " ✓" : "").append("<br>カテゴリ: ")
+                            .append(escapeHtml(normalizedCategory(todo.category())))
+                            .append("<br>締め切り日: ")
                             .append(todo.deadline() == null || todo.deadline().isEmpty()
                                     ? "未設定"
                                     : escapeHtml(todo.deadline()))
@@ -259,11 +307,14 @@ public class App {
                 }
                 html.append("<span class='actions'>")
                         .append("<a class='action edit' href='/?id=").append(todo.id())
-                        .append("&filter=").append(filter).append("&sort=").append(sort).append("'>編集</a>")
+                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&category=")
+                        .append(encodeUrl(categoryFilter)).append("'>編集</a>")
                         .append("<a class='action done' href='/done?id=").append(todo.id())
-                        .append("&filter=").append(filter).append("&sort=").append(sort).append("'>完了</a>")
+                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&category=")
+                        .append(encodeUrl(categoryFilter)).append("'>完了</a>")
                         .append("<a class='action delete' href='/delete?id=").append(todo.id())
-                        .append("&filter=").append(filter).append("&sort=").append(sort).append("'>削除</a></span></li>");
+                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&category=")
+                        .append(encodeUrl(categoryFilter)).append("'>削除</a></span></li>");
             }
             html.append("</ul>");
         }
@@ -323,6 +374,14 @@ public class App {
                 .replace("\"", "&quot;").replace("'", "&#39;");
     }
 
+    private static String normalizedCategory(String category) {
+        return category == null || category.trim().isEmpty() ? "未分類" : category.trim();
+    }
+
+    private static String encodeUrl(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
     private static String createTodosJson() throws SQLException { // 全TodoのJSON文字列を作成する
         List<Todo> todos = findAllTodos(); // データベースから全Todoを取得する
         StringBuilder json = new StringBuilder("["); // JSON配列の開始記号を追加する
@@ -335,6 +394,7 @@ public class App {
             json.append(escapeJson(todo.title())); // タイトルをJSON用にエスケープして追加する
             json.append("\",\"done\":"); // doneプロパティの開始部分を追加する
             json.append(todo.done()); // 完了状態を真偽値として追加する
+            json.append(",\"category\":\"").append(escapeJson(normalizedCategory(todo.category()))).append("\"");
             json.append("}"); // Todoオブジェクトの終了記号を追加する
         } // 全Todoの処理を終了する
         return json.append("]").toString(); // JSON配列を閉じて文字列として返す
@@ -372,12 +432,13 @@ public class App {
         exchange.close(); // HTTPレスポンスを終了する
     } // JSON送信メソッドを終了する
 
-    private static void redirect(HttpExchange exchange, String filter, String sort) throws IOException {
+    private static void redirect(HttpExchange exchange, String filter, String sort, String category) throws IOException {
         if (!"active".equals(filter) && !"done".equals(filter))
             filter = "all";
         if (!"name".equals(sort))
             sort = "new";
-        exchange.getResponseHeaders().set("Location", "/?filter=" + filter + "&sort=" + sort);
+        exchange.getResponseHeaders().set("Location", "/?filter=" + filter + "&sort=" + sort
+                + "&category=" + encodeUrl(category == null ? "" : category));
         exchange.sendResponseHeaders(303, -1);
         exchange.close();
     }
