@@ -6,6 +6,8 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection; // ★ SQLite接続用に変更
 import java.sql.DriverManager; // ★ SQLite接続用に変更
 import java.sql.PreparedStatement; // ★ SQLを安全に実行するため追加
@@ -19,6 +21,7 @@ import java.util.Locale;
 
 public class App {
     private static final String DB_URL = "jdbc:sqlite:todos.db"; // ★ CSVではなくSQLiteへ接続
+    private static final Path LEGACY_CSV = Path.of("todos.csv");
 
     private record Todo(int id, String title, boolean done, String deadline, String category) {
     } // ★ DBの1行を表す
@@ -27,7 +30,7 @@ public class App {
         return DriverManager.getConnection(DB_URL); // ★ todos.dbへ接続
     }
 
-    private static void initializeDatabase() throws SQLException { // ★ DB初期化を追加
+    private static void initializeDatabase() throws SQLException, IOException { // ★ DB初期化を追加
         String sql = "CREATE TABLE IF NOT EXISTS todos (" // ★ todos表を定義
                 + "id INTEGER PRIMARY KEY, " // ★ id列を定義
                 + "title TEXT, " // ★ title列を定義
@@ -36,6 +39,11 @@ public class App {
                 + "category TEXT DEFAULT '未分類')"; // カテゴリ列を定義
         try (Connection connection = connect(); // ★ DB接続を自動で閉じる
                 Statement statement = connection.createStatement()) { // ★ DDL実行用Statement
+            boolean isNewDatabase;
+            try (ResultSet tables = statement.executeQuery(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todos'")) {
+                isNewDatabase = !tables.next();
+            }
             statement.execute(sql); // ★ todos表がなければ作成
             boolean hasDeadline = false;
             try (ResultSet columns = statement.executeQuery("PRAGMA table_info(todos)")) {
@@ -59,6 +67,34 @@ public class App {
             if (!hasCategory) {
                 statement.execute("ALTER TABLE todos ADD COLUMN category TEXT DEFAULT '未分類'");
             }
+            if (isNewDatabase) {
+                importLegacyCsv(connection);
+            }
+        }
+    }
+
+    private static void importLegacyCsv(Connection connection) throws IOException, SQLException {
+        if (!Files.exists(LEGACY_CSV)) {
+            return;
+        }
+        String sql = "INSERT INTO todos (id, title, done, deadline, category) VALUES (?, ?, ?, ?, ?)";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (String line : Files.readAllLines(LEGACY_CSV, StandardCharsets.UTF_8)) {
+                String[] values = line.split(",", 4);
+                if (values.length < 3) {
+                    continue;
+                }
+                try {
+                    statement.setInt(1, Integer.parseInt(values[0]));
+                    statement.setString(2, values[2]);
+                    statement.setInt(3, Integer.parseInt(values[1]));
+                    statement.setString(4, values.length == 4 ? values[3] : "");
+                    statement.setString(5, "未分類");
+                    statement.executeUpdate();
+                } catch (NumberFormatException ignored) {
+                    // 壊れた行だけを読み飛ばし、他のTodoは移行する
+                }
+            }
         }
     }
 
@@ -75,11 +111,10 @@ public class App {
     }
 
     private static void completeTodo(int id) throws SQLException { // ★ リスト更新をUPDATEへ変更
-        String sql = "UPDATE todos SET done = ? WHERE id = ?"; // ★ 完了SQL
+        String sql = "UPDATE todos SET done = CASE WHEN done = 0 THEN 1 ELSE 0 END WHERE id = ?"; // 完了状態を切り替えるSQL
         try (Connection connection = connect(); // ★ DBへ接続
                 PreparedStatement statement = connection.prepareStatement(sql)) { // ★ PreparedStatementを使用
-            statement.setInt(1, 1); // ★ 完了を1で保存
-            statement.setInt(2, id); // ★ 対象idを設定
+            statement.setInt(1, id); // ★ 対象idを設定
             statement.executeUpdate(); // ★ UPDATEを実行
         }
     }
@@ -249,7 +284,7 @@ public class App {
                         <html lang="ja">
                         <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>わたしのTodo</title>
                         <style>
-                        *{box-sizing:border-box}body{max-width:640px;margin:40px auto;padding:0 16px;background:#f6f8fa;color:#24292f;font-family:system-ui,sans-serif;font-size:16px}h1{font-size:24px}form{display:flex;gap:8px}input{min-width:0;flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:6px}button,.action{display:inline-block;padding:9px 14px;border:0;border-radius:6px;color:#fff;font-size:16px;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}ul{margin:16px 0 0;padding:0;list-style:none}li{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.actions{display:flex;gap:8px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}@media(max-width:480px){body{margin:24px auto}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}
+                        *{box-sizing:border-box}body{max-width:640px;margin:40px auto;padding:0 16px;background:#f6f8fa;color:#24292f;font-family:system-ui,sans-serif;font-size:16px}h1{font-size:24px}form{display:flex;gap:8px}input{min-width:0;flex:1;padding:10px 12px;border:1px solid #d0d7de;border-radius:6px}button,.action{display:inline-block;padding:9px 14px;border:0;border-radius:6px;color:#fff;font-size:16px;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}ul{margin:16px 0 0;padding:0;list-style:none}li{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#8c959f;text-decoration:line-through}.actions{display:flex;gap:8px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}@media(max-width:480px){body{margin:24px auto}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}
                         </style>
                         </head><body><h1>わたしのTodo</h1>
                         <form method="post" action="/add"><input name="todo"><input type="date" name="deadline"><input name="category" placeholder="カテゴリ（未入力は未分類）"><button>追加</button>
@@ -318,8 +353,8 @@ public class App {
                             .append(escapeHtml(categoryFilter))
                             .append("'><button>保存</button></form>");
                 } else {
-                    html.append("<span class='todo-title'>").append(escapeHtml(todo.title()))
-                            .append(todo.done() ? " ✓" : "").append("<br>カテゴリ: ")
+                    html.append("<span class='todo-title").append(todo.done() ? " completed" : "")
+                            .append("'>").append(escapeHtml(todo.title())).append("<br>カテゴリ: ")
                             .append(escapeHtml(normalizedCategory(todo.category())))
                             .append("<br>締め切り日: ")
                             .append(todo.deadline() == null || todo.deadline().isEmpty()
