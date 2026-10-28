@@ -208,7 +208,7 @@ public class App {
             if (!title.isEmpty()) {
                 addTodo(title, deadline, category); // ★ INSERTで追加
             }
-            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"),
+            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"), formValue(body, "direction"),
                     formValue(body, "categoryFilter"));
         } else if (path.equals("/edit") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
@@ -217,42 +217,42 @@ public class App {
             if (id != null && !title.isEmpty()) {
                 editTodo(id, title);
             }
-            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"),
+            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"), formValue(body, "direction"),
                     formValue(body, "categoryFilter"));
         } else if (path.equals("/done") && method.equals("GET")) {
             Integer id = queryId(exchange);
             if (id != null) {
                 completeTodo(id); // ★ UPDATEで完了
             }
-            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"),
+            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"), queryValue(exchange, "direction"),
                     queryValue(exchange, "category"));
         } else if (path.equals("/delete") && method.equals("GET")) {
             Integer id = queryId(exchange);
             if (id != null) {
                 deleteTodo(id); // ★ DELETEで削除
             }
-            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"),
+            redirect(exchange, queryValue(exchange, "filter"), queryValue(exchange, "sort"), queryValue(exchange, "direction"),
                     queryValue(exchange, "category"));
         } else if (path.equals("/delete-completed") && method.equals("POST")) {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             deleteCompletedTodos();
-            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"),
+            redirect(exchange, formValue(body, "filter"), formValue(body, "sort"), formValue(body, "direction"),
                     formValue(body, "categoryFilter"));
         } else if (path.equals("/") && method.equals("GET")) {
             send(exchange, 200, "text/html", createPage(
-                    queryValue(exchange, "filter"), queryValue(exchange, "sort"),
+                    queryValue(exchange, "filter"), queryValue(exchange, "sort"), queryValue(exchange, "direction"),
                     queryValue(exchange, "category"), queryId(exchange),
                     queryValue(exchange, "q"))); // ★ 各条件に合う一覧を表示
         } else if (path.equals("/search") && method.equals("GET")) {
             send(exchange, 200, "text/html", createPage(queryValue(exchange, "filter"),
-                    queryValue(exchange, "sort"), queryValue(exchange, "category"), null,
+                    queryValue(exchange, "sort"), queryValue(exchange, "direction"), queryValue(exchange, "category"), null,
                     queryValue(exchange, "q")));
         } else {
             send(exchange, 404, "text/plain", "ページが見つかりません");
         }
     }
 
-    private static String createPage(String filter, String sort, String categoryFilter, Integer editId, String keyword) throws SQLException { // ★
+    private static String createPage(String filter, String sort, String direction, String categoryFilter, Integer editId, String keyword) throws SQLException { // ★
                                                                                                        // filterとsortを受け取る
         List<Todo> todos = findAllTodos(); // ★ SELECTで一覧を読み出す
         List<Todo> displayTodos = new ArrayList<>(); // ★ 元データとは別に表示用一覧を作る
@@ -261,9 +261,10 @@ public class App {
         if (!"active".equals(filter) && !"done".equals(filter)) {
             filter = "all"; // ★ 指定なし・不明な値は全部として扱う
         }
-        if (!"name".equals(sort)) {
-            sort = "new"; // ★ 指定なし・不明な値は新しい順として扱う
+        if (!"name".equals(sort) && !"deadline".equals(sort)) {
+            sort = "added"; // 指定なし・不明な値は追加順として扱う
         }
+        direction = "asc".equals(direction) ? "asc" : "desc";
         for (Todo todo : todos) {
             if ((filter.equals("all") || filter.equals("active") && !todo.done()
                     || filter.equals("done") && todo.done()) && todo.title().contains(keyword)
@@ -271,22 +272,43 @@ public class App {
                 displayTodos.add(todo); // ★ 条件に一致するTodoだけを表示用一覧へ追加
             }
         }
+        boolean ascending = direction.equals("asc");
         if (sort.equals("name")) {
             Collator collator = Collator.getInstance(Locale.JAPANESE);
             displayTodos.sort((a, b) -> {
                 int titleOrder = collator.compare(a.title(), b.title());
-                return titleOrder != 0 ? titleOrder : Integer.compare(b.id(), a.id());
+                return titleOrder != 0 ? (ascending ? titleOrder : -titleOrder) : Integer.compare(b.id(), a.id());
+            });
+        } else if (sort.equals("deadline")) {
+            displayTodos.sort((a, b) -> {
+                LocalDate aDeadline = parseDeadline(a.deadline());
+                LocalDate bDeadline = parseDeadline(b.deadline());
+                if (aDeadline == null && bDeadline == null) {
+                    return Integer.compare(b.id(), a.id());
+                }
+                if (aDeadline == null) {
+                    return 1;
+                }
+                if (bDeadline == null) {
+                    return -1;
+                }
+                int deadlineOrder = aDeadline.compareTo(bDeadline);
+                return deadlineOrder != 0 ? (ascending ? deadlineOrder : -deadlineOrder)
+                        : Integer.compare(b.id(), a.id());
             });
         } else {
-            displayTodos.sort((a, b) -> Integer.compare(b.id(), a.id()));
+            displayTodos.sort((a, b) -> ascending
+                    ? Integer.compare(a.id(), b.id())
+                    : Integer.compare(b.id(), a.id()));
         }
+        String reverseDirection = ascending ? "desc" : "asc";
         StringBuilder html = new StringBuilder(
                 """
                         <!doctype html>
                         <html lang="ja">
                         <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>わたしのTodo</title>
                         <style>
-                        *{box-sizing:border-box}html{background:#f6f8fa}body{width:100%;max-width:800px;margin:24px auto;padding:0 20px 32px;color:#24292f;font-family:system-ui,sans-serif;font-size:16px;line-height:1.5}.page-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}h1{margin:0;font-size:26px;line-height:1.25}.operation-area{margin:0 0 12px;padding:16px;border:1px solid #d0d7de;border-radius:10px;background:#fff}.operation-area h2{margin:0 0 10px;font-size:17px}.operation-area form{display:flex;gap:8px}.add-form .todo-input{flex:3}.add-form .deadline-input{flex:0 1 170px}.add-form .category-input{flex:1.6}.search-form input[name="q"]{flex:1}.filter-nav{display:flex;flex-wrap:wrap;gap:6px}.filter-link{display:inline-block;padding:6px 11px;border:1px solid transparent;border-radius:6px;color:#0969da;text-decoration:none}.filter-link:hover{background:#f3f4f6}.filter-link.selected{border-color:#0969da;background:#0969da;color:#fff;font-weight:600}.filter-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-top:12px;padding-top:12px;border-top:1px solid #d8dee4}.filter-controls form{margin:0}.filter-controls label{display:flex;align-items:center;gap:7px;white-space:nowrap}.filter-controls select{min-width:140px}input,select{min-width:0;height:42px;padding:9px 11px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f;font:inherit}input::placeholder{color:#6e7781;opacity:1}button,.action{display:inline-flex;min-height:42px;align-items:center;justify-content:center;padding:9px 14px;border:0;border-radius:6px;color:#fff;font:inherit;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}.list-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0 10px}.todo-count{margin:0;font-weight:600}.bulk-form{flex:none}.bulk-delete{min-height:36px;padding:7px 11px;border:1px solid #cf222e;background:transparent;color:#cf222e;font-size:14px}.bulk-delete:hover{background:#ffebe9}ul{margin:0;padding:0;list-style:none}li{display:flex;align-items:center;gap:12px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}li.overdue{border-color:#cf222e;background:#ffebe9;color:#cf222e}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#6e7781;text-decoration:line-through}.edit-form{display:flex;gap:8px}.actions{display:flex;flex:none;gap:6px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}.empty-state{margin:0;padding:24px;text-align:center;color:#57606a;border:1px dashed #afb8c1;border-radius:8px;background:#fff}#theme-toggle{min-height:34px;padding:6px 10px;border:1px solid #afb8c1;background:#f3f4f6;color:#57606a;font-size:13px;font-weight:500}[data-theme="dark"]{color-scheme:dark;background:#0d1117}[data-theme="dark"] body{color:#e6edf3}[data-theme="dark"] input,[data-theme="dark"] select{border-color:#6e7681;background:#0d1117;color:#e6edf3}[data-theme="dark"] .operation-area,[data-theme="dark"] li,[data-theme="dark"] .empty-state{border-color:#30363d;background:#161b22}[data-theme="dark"] .filter-controls{border-color:#30363d}[data-theme="dark"] .filter-link{color:#58a6ff}[data-theme="dark"] .filter-link:hover{background:#21262d}[data-theme="dark"] .filter-link.selected{border-color:#1f6feb;background:#1f6feb;color:#fff}[data-theme="dark"] li.overdue{border-color:#f85149;background:#3d1515;color:#ff7b72}[data-theme="dark"] button{background:#238636}[data-theme="dark"] #theme-toggle{border-color:#30363d;background:#21262d;color:#8b949e}[data-theme="dark"] .bulk-delete{border-color:#f85149;background:transparent;color:#ff7b72}[data-theme="dark"] .bulk-delete:hover{background:#3d1515}[data-theme="dark"] .done{background:#1f6feb}[data-theme="dark"] .edit{background:#8957e5}[data-theme="dark"] .delete{background:#da3633}[data-theme="dark"] .todo-title.completed,[data-theme="dark"] .empty-state{color:#8b949e}@media(max-width:640px){body{margin:16px auto;padding:0 12px 24px}.page-header{margin-bottom:12px}h1{font-size:23px}.operation-area{padding:14px}.operation-area form.add-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.75fr)}.add-form .todo-input{grid-column:1/-1}.add-form .category-input{min-width:0}.add-form button{grid-column:1/-1}.filter-controls{align-items:stretch;flex-direction:column}.filter-controls form,.filter-controls label,.filter-controls select{width:100%}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}@media(max-width:420px){.operation-area form.add-form,.search-form{display:flex;align-items:stretch;flex-direction:column}.add-form .deadline-input{flex:auto}.list-header{align-items:flex-start;flex-direction:column;gap:8px}.bulk-form,.bulk-delete{width:100%}.edit-form{align-items:stretch;flex-direction:column}}
+                        *{box-sizing:border-box}html{background:#f6f8fa}body{width:100%;max-width:800px;margin:24px auto;padding:0 20px 32px;color:#24292f;font-family:system-ui,sans-serif;font-size:16px;line-height:1.5}.page-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}h1{margin:0;font-size:26px;line-height:1.25}.operation-area{margin:0 0 12px;padding:16px;border:1px solid #d0d7de;border-radius:10px;background:#fff}.operation-area h2{margin:0 0 10px;font-size:17px}.operation-area form{display:flex;gap:8px}.add-form .todo-input{flex:3}.add-form .deadline-input{flex:0 1 170px}.add-form .category-input{flex:1.6}.search-form input[name="q"]{flex:1}.filter-nav{display:flex;flex-wrap:wrap;gap:6px}.filter-link{display:inline-block;padding:6px 11px;border:1px solid transparent;border-radius:6px;color:#0969da;text-decoration:none}.filter-link:hover{background:#f3f4f6}.filter-link.selected{border-color:#0969da;background:#0969da;color:#fff;font-weight:600}.filter-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-top:12px;padding-top:12px;border-top:1px solid #d8dee4}.filter-controls form{margin:0}.filter-controls label{display:flex;align-items:center;gap:7px;white-space:nowrap}.filter-controls select{min-width:140px}.sort-direction{border:1px solid #0969da;background:#fff;color:#0969da}input,select{min-width:0;height:42px;padding:9px 11px;border:1px solid #d0d7de;border-radius:6px;background:#fff;color:#24292f;font:inherit}input::placeholder{color:#6e7781;opacity:1}button,.action{display:inline-flex;min-height:42px;align-items:center;justify-content:center;padding:9px 14px;border:0;border-radius:6px;color:#fff;font:inherit;font-weight:600;line-height:1.25;text-decoration:none;white-space:nowrap}button{background:#1f883d;cursor:pointer}.list-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0 10px}.todo-count{margin:0;font-weight:600}.bulk-form{flex:none}.bulk-delete{min-height:36px;padding:7px 11px;border:1px solid #cf222e;background:transparent;color:#cf222e;font-size:14px}.bulk-delete:hover{background:#ffebe9}ul{margin:0;padding:0;list-style:none}li{display:flex;align-items:center;gap:12px;margin-bottom:8px;padding:12px 14px;border:1px solid #d0d7de;border-radius:8px;background:#fff}li.overdue{border-color:#cf222e;background:#ffebe9;color:#cf222e}.todo-title,.edit-form{min-width:0;flex:1;overflow-wrap:anywhere}.todo-title.completed{color:#6e7781;text-decoration:line-through}.edit-form{display:flex;gap:8px}.actions{display:flex;flex:none;gap:6px}.done{background:#0969da}.edit{background:#8250df}.delete{background:#cf222e}.empty-state{margin:0;padding:24px;text-align:center;color:#57606a;border:1px dashed #afb8c1;border-radius:8px;background:#fff}#theme-toggle{min-height:34px;padding:6px 10px;border:1px solid #afb8c1;background:#f3f4f6;color:#57606a;font-size:13px;font-weight:500}[data-theme="dark"]{color-scheme:dark;background:#0d1117}[data-theme="dark"] body{color:#e6edf3}[data-theme="dark"] input,[data-theme="dark"] select{border-color:#6e7681;background:#0d1117;color:#e6edf3}[data-theme="dark"] .operation-area,[data-theme="dark"] li,[data-theme="dark"] .empty-state{border-color:#30363d;background:#161b22}[data-theme="dark"] .filter-controls{border-color:#30363d}[data-theme="dark"] .filter-link{color:#58a6ff}[data-theme="dark"] .filter-link:hover{background:#21262d}[data-theme="dark"] .filter-link.selected{border-color:#1f6feb;background:#1f6feb;color:#fff}[data-theme="dark"] li.overdue{border-color:#f85149;background:#3d1515;color:#ff7b72}[data-theme="dark"] button{background:#238636}[data-theme="dark"] .sort-direction{border-color:#58a6ff;background:#161b22;color:#58a6ff}[data-theme="dark"] #theme-toggle{border-color:#30363d;background:#21262d;color:#8b949e}[data-theme="dark"] .bulk-delete{border-color:#f85149;background:transparent;color:#ff7b72}[data-theme="dark"] .bulk-delete:hover{background:#3d1515}[data-theme="dark"] .done{background:#1f6feb}[data-theme="dark"] .edit{background:#8957e5}[data-theme="dark"] .delete{background:#da3633}[data-theme="dark"] .todo-title.completed,[data-theme="dark"] .empty-state{color:#8b949e}@media(max-width:640px){body{margin:16px auto;padding:0 12px 24px}.page-header{margin-bottom:12px}h1{font-size:23px}.operation-area{padding:14px}.operation-area form.add-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.75fr)}.add-form .todo-input{grid-column:1/-1}.add-form .category-input{min-width:0}.add-form button{grid-column:1/-1}.filter-controls{align-items:stretch;flex-direction:column}.filter-controls form,.filter-controls label,.filter-controls select,.sort-direction{width:100%}li{align-items:stretch;flex-direction:column}.actions{width:100%}.action{flex:1;text-align:center}}@media(max-width:420px){.operation-area form.add-form,.search-form{display:flex;align-items:stretch;flex-direction:column}.add-form .deadline-input{flex:auto}.list-header{align-items:flex-start;flex-direction:column;gap:8px}.bulk-form,.bulk-delete{width:100%}.edit-form{align-items:stretch;flex-direction:column}}
                         </style>
                         <script>if(localStorage.getItem('theme')==='dark'){document.documentElement.dataset.theme='dark'}</script>
                         </head><body><header class="page-header"><h1>わたしのTodo</h1>
@@ -296,32 +318,42 @@ public class App {
                         """);
         html.append("<input type='hidden' name='filter' value='").append(filter).append("'>")
                 .append("<input type='hidden' name='sort' value='").append(sort).append("'>")
+                .append("<input type='hidden' name='direction' value='").append(direction).append("'>")
                 .append("<input type='hidden' name='categoryFilter' value='")
                 .append(escapeHtml(categoryFilter)).append("'></form></section>")
                 .append("<section class='operation-area' aria-labelledby='search-heading'><h2 id='search-heading'>Todoを検索</h2><form class='search-form' method='get' action='/search'>")
                 .append("<input name='q' placeholder='キーワードで検索' value='")
                 .append(escapeHtml(keyword)).append("'><input type='hidden' name='filter' value='")
                 .append(filter).append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><input type='hidden' name='direction' value='").append(direction)
                 .append("'><input type='hidden' name='category' value='").append(escapeHtml(categoryFilter))
                 .append("'><button>検索</button></form></section>")
                 .append("<section class='operation-area' aria-labelledby='filter-heading'><h2 id='filter-heading'>表示を絞り込み</h2><nav class='filter-nav'><a class='filter-link").append(filter.equals("all") ? " selected' aria-current='page" : "")
-                .append("' href='/?filter=all&sort=").append(sort).append("&category=")
+                .append("' href='/?filter=all&sort=").append(sort).append("&direction=").append(direction).append("&category=")
                 .append(encodeUrl(categoryFilter)).append("'>全部</a>")
                 .append("<a class='filter-link").append(filter.equals("active") ? " selected' aria-current='page" : "")
-                .append("' href='/?filter=active&sort=").append(sort).append("&category=")
+                .append("' href='/?filter=active&sort=").append(sort).append("&direction=").append(direction).append("&category=")
                 .append(encodeUrl(categoryFilter)).append("'>未完了だけ</a>")
                 .append("<a class='filter-link").append(filter.equals("done") ? " selected' aria-current='page" : "")
-                .append("' href='/?filter=done&sort=").append(sort).append("&category=")
+                .append("' href='/?filter=done&sort=").append(sort).append("&direction=").append(direction).append("&category=")
                 .append(encodeUrl(categoryFilter)).append("'>完了だけ</a></nav><div class='filter-controls'>")
                 .append("<form method='get' action='/'><input type='hidden' name='filter' value='")
                 .append(filter).append("'><input type='hidden' name='category' value='")
-                .append(escapeHtml(categoryFilter)).append("'><label>並び順 <select name='sort' onchange='saveScroll();this.form.submit()'>")
-                .append("<option value='new'").append(sort.equals("new") ? " selected" : "")
-                .append(">新しい順</option><option value='name'")
+                .append(escapeHtml(categoryFilter)).append("'><input type='hidden' name='direction' value='")
+                .append(direction).append("'><label>並び順 <select name='sort' onchange=\"this.form.elements.direction.value=this.value==='added'?'desc':'asc';saveScroll();this.form.submit()\">")
+                .append("<option value='added'").append(sort.equals("added") ? " selected" : "")
+                .append(">追加順</option><option value='deadline'").append(sort.equals("deadline") ? " selected" : "")
+                .append(">期限順</option><option value='name'")
                 .append(sort.equals("name") ? " selected" : "")
                 .append(">名前順</option></select></label></form>")
+                .append("<form method='get' action='/'><input type='hidden' name='filter' value='").append(filter)
+                .append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><input type='hidden' name='category' value='").append(escapeHtml(categoryFilter))
+                .append("'><button class='sort-direction' name='direction' value='").append(reverseDirection)
+                .append("' title='並び順を逆にする' aria-label='並び順を逆にする'>↑↓</button></form>")
                 .append("<form method='get' action='/'><input type='hidden' name='filter' value='")
                 .append(filter).append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><input type='hidden' name='direction' value='").append(direction)
                 .append("'><label>カテゴリ <select name='category' onchange='saveScroll();this.form.submit()'>")
                 .append("<option value=''>すべて</option>");
         String selectedCategory = categoryFilter;
@@ -340,6 +372,7 @@ public class App {
                         : "")
                 .append("><input type='hidden' name='filter' value='").append(filter)
                 .append("'><input type='hidden' name='sort' value='").append(sort)
+                .append("'><input type='hidden' name='direction' value='").append(direction)
                 .append("'><input type='hidden' name='categoryFilter' value='")
                 .append(escapeHtml(categoryFilter))
                 .append("'><button class='bulk-delete' type='submit'>完了済みを一括削除</button></form></div>");
@@ -357,6 +390,7 @@ public class App {
                             .append("' required><input type='hidden' name='id' value='").append(todo.id())
                             .append("'><input type='hidden' name='filter' value='").append(filter)
                             .append("'><input type='hidden' name='sort' value='").append(sort)
+                            .append("'><input type='hidden' name='direction' value='").append(direction)
                             .append("'><input type='hidden' name='categoryFilter' value='")
                             .append(escapeHtml(categoryFilter))
                             .append("'><button>保存</button></form>");
@@ -372,13 +406,13 @@ public class App {
                 }
                 html.append("<span class='actions'>")
                         .append("<a class='action edit' href='/?id=").append(todo.id())
-                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&category=")
+                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&direction=").append(direction).append("&category=")
                         .append(encodeUrl(categoryFilter)).append("'>編集</a>")
                         .append("<a class='action done' href='/done?id=").append(todo.id())
-                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&category=")
+                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&direction=").append(direction).append("&category=")
                         .append(encodeUrl(categoryFilter)).append("'>完了</a>")
                         .append("<a class='action delete' href='/delete?id=").append(todo.id())
-                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&category=")
+                        .append("&filter=").append(filter).append("&sort=").append(sort).append("&direction=").append(direction).append("&category=")
                         .append(encodeUrl(categoryFilter)).append("'>削除</a></span></li>");
             }
             html.append("</ul>");
@@ -394,6 +428,17 @@ public class App {
             return LocalDate.parse(todo.deadline()).isBefore(LocalDate.now());
         } catch (DateTimeParseException ignored) {
             return false;
+        }
+    }
+
+    private static LocalDate parseDeadline(String deadline) {
+        if (deadline == null || deadline.isEmpty()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(deadline);
+        } catch (DateTimeParseException ignored) {
+            return null;
         }
     }
 
@@ -508,12 +553,14 @@ public class App {
         exchange.close(); // HTTPレスポンスを終了する
     } // JSON送信メソッドを終了する
 
-    private static void redirect(HttpExchange exchange, String filter, String sort, String category) throws IOException {
+    private static void redirect(HttpExchange exchange, String filter, String sort, String direction, String category) throws IOException {
         if (!"active".equals(filter) && !"done".equals(filter))
             filter = "all";
-        if (!"name".equals(sort))
-            sort = "new";
+        if (!"name".equals(sort) && !"deadline".equals(sort))
+            sort = "added";
+        direction = "asc".equals(direction) ? "asc" : "desc";
         exchange.getResponseHeaders().set("Location", "/?filter=" + filter + "&sort=" + sort
+                + "&direction=" + direction
                 + "&category=" + encodeUrl(category == null ? "" : category));
         exchange.sendResponseHeaders(303, -1);
         exchange.close();
